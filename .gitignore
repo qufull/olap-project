@@ -1,0 +1,4 @@
+# локальная база DuckDB пересоздаётся скриптом scripts/duckdb_smoke.py
+*.duckdb
+.DS_Store
+__MACOSX/
