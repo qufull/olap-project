@@ -16,7 +16,7 @@
 ```bash
 docker compose up -d
 chmod +x scripts/init_ch.sh
-./scripts/init_ch.sh        # создаёт БД retail_dw и грузит учебный sample
+./scripts/init_ch.sh        
 curl http://localhost:8123/ping
 ```
 
