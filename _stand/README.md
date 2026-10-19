@@ -78,4 +78,19 @@ python scripts/duckdb_smoke.py
 ```bash
 python scripts/load_duckdb.py
 
+```markdown
+---
+
+## З04. Аналитический SQL
+
+- **Эталон главной метрики:** `sql/canonical_metric.sql` (`Net GMV` = `<ВПИШИ_ЧИСЛО>` BYN)
+- **Аналитические запросы по 3 вопросам паспорта:** `sql/analytics.sql`
+  - **Вопрос 1 (Динамика и рейтинг кухонь):** `JOIN dim_restaurants`, `GROUP BY` по месяцам и кухням + оконные функции `SUM() OVER (PARTITION BY order_month)` (доля кухни в месяце) и `RANK() OVER (...)` (место кухни в рейтинге месяца).
+  - **Вопрос 2 (SLA доставки и транспорт в часы пик):** `JOIN dim_couriers`, классификация часов пик (`12:00–13:59`, `18:00–19:59`), расчёт `AVG(delivery_time_minutes)` и доли опозданий (`FILTER (WHERE status = 'Опоздание')`).
+  - **Вопрос 3 (Выходные против будней и когорты клиентов):** `JOIN dim_date` и `dim_users`, сравнение среднедневного оборота в Пт–Вс против Пн–Чт и расчёт вклада когорт через оконную функцию `SUM(net_gmv_byn) OVER ()`.
+
+### Как запустить
+```bash
+python scripts/run_analytics.py
+
 
