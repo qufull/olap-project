@@ -1,0 +1,2 @@
+От рамзека
+HelloWorld("print()")
