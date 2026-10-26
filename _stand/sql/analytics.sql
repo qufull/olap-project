@@ -1,86 +1,109 @@
+-- =====================================================================
+-- Аналитические SQL-запросы к витрине (Fact Constellation Schema)
+-- СУБД: DuckDB
+-- =====================================================================
 
-WITH monthly_cuisine AS (
-    SELECT
-        DATE_TRUNC('month', f.order_date)::DATE AS order_month,
-        r.cuisine                               AS cuisine,
-        COUNT(f.order_id)                       AS orders_cnt,
-        SUM(f.total_amount)                     AS net_gmv_byn,
-        ROUND(SUM(f.total_amount) / COUNT(f.order_id), 2) AS avg_order_value_byn
-    FROM fact_orders f
-    JOIN dim_restaurants r ON f.restaurant_id = r.restaurant_id
-    WHERE f.status IN ('Доставлен', 'Опоздание')
+-- ---------------------------------------------------------------------
+-- ВОПРОС 1: Топ категорий блюд, глубина продаж и структура спроса
+-- «Какие категории блюд (Пицца, Суши, Бургеры и др.) приносят наибольшую выручку,
+--  каков объём проданных порций, средняя цена блюда, а также доля выручки каждой
+--  категории внутри каждого месяца (оконная функция)?»
+-- ---------------------------------------------------------------------
+WITH monthly_categories AS (
+    SELECT 
+        DATE_TRUNC('month', o.order_date)::DATE AS order_month,
+        m.category AS item_category,
+        COUNT(oi.order_item_id) AS items_sold_cnt,
+        SUM(oi.quantity) AS total_portions_qty,
+        ROUND(AVG(oi.unit_price), 2) AS avg_unit_price_byn,
+        ROUND(SUM(oi.subtotal_amount), 2) AS category_revenue_byn
+    FROM fact_order_items oi
+    JOIN fact_orders o ON oi.order_id = o.order_id
+    JOIN dim_menu_items m ON oi.item_id = m.item_id
+    WHERE o.status IN ('Доставлен', 'Опоздание')
     GROUP BY 1, 2
 )
-SELECT
+SELECT 
     order_month,
-    cuisine,
+    item_category,
+    items_sold_cnt,
+    total_portions_qty,
+    avg_unit_price_byn,
+    category_revenue_byn,
+    ROUND(category_revenue_byn * 100.0 / SUM(category_revenue_byn) OVER (PARTITION BY order_month), 2) AS month_revenue_share_pct,
+    DENSE_RANK() OVER (PARTITION BY order_month ORDER BY category_revenue_byn DESC) AS rank_in_month
+FROM monthly_categories
+ORDER BY order_month, rank_in_month;
+
+
+-- ---------------------------------------------------------------------
+-- ВОПРОС 2: SLA доставки, опоздания и клиентские оценки по типам транспорта
+-- «Каково среднее время доставки, процент опозданий (>60 мин) и средняя
+--  оценка доставки клиентами (delivery_rating из fact_reviews) в разрезе
+--  типа транспорта курьера в часы пик против обычных часов?»
+-- ---------------------------------------------------------------------
+WITH peak_hours_classified AS (
+    SELECT 
+        c.vehicle_type,
+        CASE 
+            WHEN EXTRACT(HOUR FROM o.order_date) IN (12, 13, 18, 19) THEN 'Час пик (12-14, 18-20)'
+            ELSE 'Обычные часы'
+        END AS time_period,
+        o.order_id,
+        o.delivery_time_minutes,
+        o.status,
+        r.delivery_rating
+    FROM fact_orders o
+    JOIN dim_couriers c ON o.courier_id = c.courier_id
+    LEFT JOIN fact_reviews r ON o.order_id = r.order_id
+    WHERE o.status IN ('Доставлен', 'Опоздание')
+)
+SELECT 
+    vehicle_type,
+    time_period,
+    COUNT(order_id) AS completed_orders_cnt,
+    ROUND(AVG(delivery_time_minutes), 1) AS avg_delivery_minutes,
+    COUNT(*) FILTER (WHERE status = 'Опоздание') AS late_orders_cnt,
+    ROUND(COUNT(*) FILTER (WHERE status = 'Опоздание') * 100.0 / COUNT(*), 2) AS late_delivery_rate_pct,
+    ROUND(AVG(delivery_rating), 2) AS avg_delivery_rating,
+    COUNT(delivery_rating) AS reviews_cnt
+FROM peak_hours_classified
+GROUP BY vehicle_type, time_period
+ORDER BY vehicle_type, time_period DESC;
+
+
+-- ---------------------------------------------------------------------
+-- ВОПРОС 3: География доставки, средний чек и рейтинг еды по районам города
+-- «Каковы объём чистой выручки (Net GMV), средний чек заказа, средняя стоимость
+--  доставки и средняя оценка качества блюд (food_rating) в разрезе районов Минска
+--  и типов зон (Центральная, Спальная, Промышленная, Пригород)?»
+-- ---------------------------------------------------------------------
+WITH district_orders AS (
+    SELECT 
+        d.district_name,
+        d.zone_type,
+        COUNT(DISTINCT o.order_id) AS orders_cnt,
+        SUM(o.total_amount) AS net_gmv_byn,
+        ROUND(AVG(o.total_amount), 2) AS avg_order_value_byn,
+        ROUND(AVG(o.delivery_fee), 2) AS avg_delivery_fee_byn,
+        ROUND(AVG(rev.food_rating), 2) AS avg_food_rating,
+        COUNT(rev.review_id) AS reviews_received_cnt
+    FROM fact_orders o
+    JOIN dim_districts d ON o.district_id = d.district_id
+    LEFT JOIN fact_reviews rev ON o.order_id = rev.order_id
+    WHERE o.status IN ('Доставлен', 'Опоздание')
+    GROUP BY d.district_name, d.zone_type
+)
+SELECT 
+    district_name,
+    zone_type,
     orders_cnt,
     net_gmv_byn,
     avg_order_value_byn,
-    -- Оконная функция 1: доля кухни в выручке конкретного месяца (%)
-    ROUND(net_gmv_byn * 100.0 / SUM(net_gmv_byn) OVER (PARTITION BY order_month), 2) AS month_revenue_share_pct,
-    -- Оконная функция 2: место (рейтинг) кухни по выручке внутри месяца
-    RANK() OVER (PARTITION BY order_month ORDER BY net_gmv_byn DESC) AS cuisine_rank_in_month
-FROM monthly_cuisine
-ORDER BY order_month, cuisine_rank_in_month;
-
-
--- ============================================================================
--- Вопрос 2 → Операционная эффективность транспорта (vehicle_type) и SLA доставки:
---            среднее время доставки и доля опозданий в часы пик (12:00-13:59, 18:00-19:59) 
---            против остальных часов
--- ============================================================================
-SELECT
-    c.vehicle_type,
-    CASE 
-        WHEN EXTRACT(HOUR FROM f.order_date) IN (12, 13, 18, 19) THEN 'Час пик (12-14, 18-20)'
-        ELSE 'Обычные часы'
-    END AS time_period,
-    COUNT(f.order_id) AS completed_orders_cnt,
-    ROUND(AVG(f.delivery_time_minutes), 1) AS avg_delivery_minutes,
-    COUNT(*) FILTER (WHERE f.status = 'Опоздание') AS late_orders_cnt,
-    ROUND(
-        COUNT(*) FILTER (WHERE f.status = 'Опоздание') * 100.0 / COUNT(f.order_id),
-        2
-    ) AS late_delivery_rate_pct
-FROM fact_orders f
-JOIN dim_couriers c ON f.courier_id = c.courier_id
-WHERE f.status IN ('Доставлен', 'Опоздание')
-GROUP BY 1, 2
-ORDER BY c.vehicle_type, time_period DESC;
-
-
--- ============================================================================
--- Вопрос 3 → Когортная активность и вклад выходных дней (Пт–Вс против Пн–Чт) 
---            + доля ранних пользователей (регистрация до 2025-10-01) против новых
--- ============================================================================
-WITH cohort_stats AS (
-    SELECT
-        CASE 
-            WHEN d.is_weekend THEN 'Выходные (Пт-Вс)'
-            ELSE 'Будни (Пн-Чт)'
-        END AS day_type,
-        CASE 
-            WHEN u.registration_date < DATE '2025-10-01' THEN '1. Ранние (до 2025-10-01)'
-            ELSE '2. Новые (с 2025-10-01)'
-        END AS user_cohort,
-        COUNT(DISTINCT d.date_key) AS calendar_days_cnt,
-        COUNT(f.order_id)          AS orders_cnt,
-        SUM(f.total_amount)        AS net_gmv_byn
-    FROM fact_orders f
-    JOIN dim_date d  ON CAST(f.order_date AS DATE) = d.date_key
-    JOIN dim_users u ON f.user_id = u.user_id
-    WHERE f.status IN ('Доставлен', 'Опоздание')
-    GROUP BY 1, 2
-)
-SELECT
-    day_type,
-    user_cohort,
-    orders_cnt,
-    ROUND(orders_cnt * 1.0 / calendar_days_cnt, 1) AS avg_orders_per_day,
-    net_gmv_byn,
-    ROUND(net_gmv_byn / calendar_days_cnt, 2)      AS avg_daily_gmv_byn,
-    -- Оконная функция: доля сегмента в общей чистой выручке сервиса (%)
-    ROUND(net_gmv_byn * 100.0 / SUM(net_gmv_byn) OVER (), 2) AS total_gmv_share_pct
-FROM cohort_stats
-ORDER BY day_type DESC, user_cohort;
+    avg_delivery_fee_byn,
+    avg_food_rating,
+    reviews_received_cnt,
+    ROUND(net_gmv_byn * 100.0 / SUM(net_gmv_byn) OVER (), 2) AS city_gmv_share_pct,
+    RANK() OVER (ORDER BY net_gmv_byn DESC) AS district_revenue_rank
+FROM district_orders
+ORDER BY net_gmv_byn DESC;
