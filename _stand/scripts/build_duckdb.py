@@ -17,7 +17,7 @@ def main():
     con = duckdb.connect(str(DB_PATH))
 
     # 1. Выполняем DDL
-    print("[1/3] Пересоздание схемы DDL (Constellation Schema)...")
+    print("[1/3] Пересоздание схемы DDL (Яндекс Доставка: Fact Constellation Schema)...")
     con.execute(DDL_PATH.read_text(encoding="utf-8"))
 
     # 2. Грузим CSV из data/raw/
@@ -25,15 +25,17 @@ def main():
     con.execute(f"""
         -- Измерения (Dimensions)
         INSERT INTO dim_districts
-        SELECT district_id, district_name, zone_type, CAST(delivery_multiplier AS DECIMAL(3, 2))
+        SELECT district_id, district_name, zone_type, 
+               CAST(base_delivery_cost AS DECIMAL(6, 2)),
+               CAST(avg_distance_km AS DECIMAL(4, 1))
         FROM read_csv_auto('{RAW_DIR.as_posix()}/dim_districts.csv', header=True);
 
         INSERT INTO dim_users
-        SELECT user_id, name, phone, CAST(registration_date AS DATE), district_id
+        SELECT user_id, name, phone, CAST(registration_date AS DATE), district_id, has_plus_subscription
         FROM read_csv_auto('{RAW_DIR.as_posix()}/dim_users.csv', header=True);
 
         INSERT INTO dim_restaurants
-        SELECT restaurant_id, name, cuisine, district_id, CAST(rating AS DECIMAL(3, 2))
+        SELECT restaurant_id, name, cuisine, district_id, partnership_tier, CAST(rating AS DECIMAL(3, 2))
         FROM read_csv_auto('{RAW_DIR.as_posix()}/dim_restaurants.csv', header=True);
 
         INSERT INTO dim_menu_items
@@ -42,7 +44,7 @@ def main():
         FROM read_csv_auto('{RAW_DIR.as_posix()}/dim_menu_items.csv', header=True);
 
         INSERT INTO dim_couriers
-        SELECT courier_id, name, phone, vehicle_type
+        SELECT courier_id, name, phone, vehicle_type, courier_tier
         FROM read_csv_auto('{RAW_DIR.as_posix()}/dim_couriers.csv', header=True);
 
         INSERT INTO dim_date
@@ -59,9 +61,18 @@ def main():
         SELECT 
             order_id, user_id, restaurant_id, courier_id, district_id,
             CAST(order_date AS TIMESTAMP),
+            tariff, weather,
+            CAST(surge_multiplier AS DECIMAL(3, 2)),
+            CAST(items_subtotal AS DECIMAL(10, 2)),
             CAST(delivery_fee AS DECIMAL(6, 2)),
+            CAST(surge_fee AS DECIMAL(6, 2)),
+            CAST(discount_amount AS DECIMAL(6, 2)),
             CAST(total_amount AS DECIMAL(10, 2)),
-            TRY_CAST(delivery_time_minutes AS INTEGER),
+            CAST(platform_commission AS DECIMAL(10, 2)),
+            CAST(courier_payout AS DECIMAL(8, 2)),
+            CAST(tip_amount AS DECIMAL(6, 2)),
+            cooking_time_min, transit_time_min,
+            TRY_CAST(delivery_time_min AS INTEGER),
             status
         FROM read_csv_auto('{RAW_DIR.as_posix()}/fact_orders.csv', header=True);
 
@@ -69,21 +80,32 @@ def main():
         SELECT 
             order_item_id, order_id, item_id, quantity,
             CAST(unit_price AS DECIMAL(8, 2)),
-            CAST(item_discount AS DECIMAL(8, 2)),
+            CAST(discount_amount AS DECIMAL(8, 2)),
             CAST(subtotal_amount AS DECIMAL(10, 2))
         FROM read_csv_auto('{RAW_DIR.as_posix()}/fact_order_items.csv', header=True);
+
+        INSERT INTO fact_courier_shifts
+        SELECT 
+            shift_id, courier_id, CAST(shift_date AS DATE),
+            CAST(hours_online AS DECIMAL(4, 2)),
+            orders_completed,
+            CAST(base_earnings AS DECIMAL(8, 2)),
+            CAST(bonus_earnings AS DECIMAL(8, 2)),
+            CAST(tips_total AS DECIMAL(6, 2)),
+            CAST(total_payout AS DECIMAL(8, 2))
+        FROM read_csv_auto('{RAW_DIR.as_posix()}/fact_courier_shifts.csv', header=True);
 
         INSERT INTO fact_reviews
         SELECT 
             review_id, order_id, user_id, restaurant_id, courier_id,
             CAST(review_date AS TIMESTAMP),
-            food_rating, delivery_rating, has_comment
+            food_rating, delivery_rating, complaint_tag, has_comment
         FROM read_csv_auto('{RAW_DIR.as_posix()}/fact_reviews.csv', header=True);
     """)
 
     # 3. Проверки витрины
     print(f"[3/3] Выполнение контрольных проверок (время загрузки: {time.time() - t0:.2f} с)...")
-    print("\n--- 1. Число строк во всех таблицах модели ---")
+    print("\n--- 1. Число строк во всех 10 таблицах модели ---")
     con.sql("""
         SELECT 'dim_districts' AS table_name, 'Измерение' AS role, COUNT(*) AS rows FROM dim_districts
         UNION ALL SELECT 'dim_users', 'Измерение', COUNT(*) FROM dim_users
@@ -93,16 +115,17 @@ def main():
         UNION ALL SELECT 'dim_date', 'Измерение', COUNT(*) FROM dim_date
         UNION ALL SELECT 'fact_orders', 'ФАКТ (Заказы)', COUNT(*) FROM fact_orders
         UNION ALL SELECT 'fact_order_items', 'ФАКТ (Позиции чеков)', COUNT(*) FROM fact_order_items
+        UNION ALL SELECT 'fact_courier_shifts', 'ФАКТ (Смены курьеров)', COUNT(*) FROM fact_courier_shifts
         UNION ALL SELECT 'fact_reviews', 'ФАКТ (Отзывы)', COUNT(*) FROM fact_reviews
     """).show()
 
     print("--- 2. Проверка целостности внешних ключей (Broken Links / Orphans) ---")
     con.sql("""
         SELECT
-            COUNT(*) FILTER (WHERE u.user_id IS NULL) AS missing_users_in_orders,
-            COUNT(*) FILTER (WHERE r.restaurant_id IS NULL) AS missing_restaurants_in_orders,
-            COUNT(*) FILTER (WHERE c.courier_id IS NULL) AS missing_couriers_in_orders,
-            COUNT(*) FILTER (WHERE d.district_id IS NULL) AS missing_districts_in_orders
+            COUNT(*) FILTER (WHERE u.user_id IS NULL) AS missing_users,
+            COUNT(*) FILTER (WHERE r.restaurant_id IS NULL) AS missing_restaurants,
+            COUNT(*) FILTER (WHERE c.courier_id IS NULL) AS missing_couriers,
+            COUNT(*) FILTER (WHERE d.district_id IS NULL) AS missing_districts
         FROM fact_orders f
         LEFT JOIN dim_users u ON f.user_id = u.user_id
         LEFT JOIN dim_restaurants r ON f.restaurant_id = r.restaurant_id
@@ -110,26 +133,15 @@ def main():
         LEFT JOIN dim_districts d ON f.district_id = d.district_id
     """).show()
 
-    print("--- 3. Проверка целостности позиций чеков (fact_order_items) ---")
-    con.sql("""
-        SELECT
-            COUNT(*) FILTER (WHERE o.order_id IS NULL) AS missing_orders_in_items,
-            COUNT(*) FILTER (WHERE m.item_id IS NULL) AS missing_menu_items
-        FROM fact_order_items oi
-        LEFT JOIN fact_orders o ON oi.order_id = o.order_id
-        LEFT JOIN dim_menu_items m ON oi.item_id = m.item_id
-    """).show()
-
-    print("--- 4. Главные метрики хранилища ---")
+    print("--- 3. Финансовые метрики Яндекс Доставки ---")
     con.sql("""
         SELECT
             COUNT(*) AS total_orders,
             SUM(total_amount) FILTER (WHERE status IN ('Доставлен', 'Опоздание')) AS net_gmv_byn,
-            SUM(total_amount) AS gross_gmv_byn,
-            (SELECT COUNT(*) FROM fact_order_items) AS total_order_items_cnt,
-            (SELECT COUNT(*) FROM fact_reviews) AS total_reviews_cnt,
-            (SELECT ROUND(AVG(food_rating), 2) FROM fact_reviews) AS avg_food_rating,
-            (SELECT ROUND(AVG(delivery_rating), 2) FROM fact_reviews) AS avg_delivery_rating
+            SUM(platform_commission) FILTER (WHERE status IN ('Доставлен', 'Опоздание')) AS platform_take_rate_byn,
+            SUM(delivery_fee + surge_fee) FILTER (WHERE status IN ('Доставлен', 'Опоздание')) AS total_delivery_revenue_byn,
+            SUM(courier_payout) FILTER (WHERE status IN ('Доставлен', 'Опоздание')) AS total_courier_payout_byn,
+            ROUND(AVG(surge_multiplier), 2) AS avg_surge_multiplier
         FROM fact_orders
     """).show()
 

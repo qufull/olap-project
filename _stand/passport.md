@@ -1,31 +1,36 @@
 ---
-title: "Паспорт аналитической модели: Сервис доставки еды (Fact Constellation Schema)"
-domain: "Доставка еды (Food Delivery)"
+title: "Паспорт аналитической модели: Яндекс Доставка (Fact Constellation Schema)"
+domain: "Яндекс Доставка (Food & Express Delivery Platform)"
 assignment: З02
-tags: [курс/olap, паспорт, constellation-schema]
+tags: [курс/olap, паспорт, constellation-schema, yandex-delivery]
 ---
 
-# Паспорт модели: Сервис доставки еды
+# Паспорт модели: Логистическая платформа «Яндекс Доставка»
 
 ## 1. Бизнес-процесс и гранулярность (Зерно фактов)
 
-* **Домен:** Сервис экспресс-доставки готовой еды из ресторанов клиентам по районам города.
+* **Домен:** Двусторонний маркетплейс и логистическая платформа экспресс-доставки еды из ресторанов и Dark Kitchens клиентам в масштабе мегаполиса (аналог Яндекс Еда / Яндекс Go Доставка).
 * **Период данных:** `2025-10-01` — `2026-09-30`.
-* **Архитектура:** Fact Constellation Schema (Созвездие фактов с общими справочниками).
-* **Суммарный объём фактов:** **4 186 869 строк**.
+* **Архитектура:** Fact Constellation Schema (4 таблицы фактов, 6 измерений).
+* **Суммарный объём фактов:** **2 373 022 строки**.
 
 ### Что означает одна строка в таблицах фактов (Grain):
 
-1. **`fact_orders` (Заказы):**
-   > **Одна строка в `fact_orders` = один оформленный клиентский заказ (чек)** с уникальным `order_id`, фиксированным временем создания, назначенной стоимостью доставки, итоговой суммой заказа, назначенным курьером, выбранным рестораном, целевым районом города и финальным статусом выполнения (`Доставлен`, `Опоздание`, `Отменен`).
-   > *Проверка зерна:* `SELECT COUNT(*) = COUNT(DISTINCT order_id) FROM fact_orders;` (1 000 000 строк).
+1. **`fact_orders` (Заказы и логистические поездки):**
+   > **Одна строка в `fact_orders` = один оформленный клиентский заказ на доставку** с уникальным `order_id`, фиксированным временем создания, тарифом (`Экспресс`, `Стандарт`, `Эконом`), погодными условиями (`Ясно`, `Дождь`, `Снегопад`), коэффициентом повышенного спроса (`surge_multiplier`), стоимостью блюд, платой за доставку, надбавкой за Surge, скидкой по подписке Яндекс Плюс, итоговым чеком клиента (GMV), комиссией платформы (Take Rate), выплатой курьеру (`courier_payout`), чаевыми, временем готовки рестораном (`cooking_time_min`), временем курьера в пути (`transit_time_min`), общим временем доставки (`delivery_time_min`) и финальным статусом выполнения (`Доставлен`, `Опоздание`, `Отменен`).
+   > *Проверка зерна:* `SELECT COUNT(*) = COUNT(DISTINCT order_id) FROM fact_orders;` (600 000 строк).
 
 2. **`fact_order_items` (Товарные позиции чеков / детализация блюд):**
-   > **Одна строка в `fact_order_items` = одна позиция конкретного блюда в составе заказа** с уникальным `order_item_id`, ссылкой на родительский `order_id`, позицию меню `item_id`, количеством порций (`quantity`), ценой за единицу (`unit_price`), применённой скидкой (`item_discount`) и суммой позиции (`subtotal_amount`).
-   > *Связь с родительским чеком:* сумма позиций чека + стоимость доставки равна сумме заказа: `SUM(subtotal_amount) + delivery_fee = total_amount`. (2 601 720 строк).
+   > **Одна строка в `fact_order_items` = одна позиция конкретного блюда в составе заказа** с уникальным `order_item_id`, ссылкой на родительский `order_id`, позицию меню `item_id`, количеством порций (`quantity`), базовой ценой (`unit_price`), скидкой (`discount_amount`) и итоговой стоимостью позиции (`subtotal_amount`).
+   > *Проверка зерна:* `SELECT COUNT(*) = COUNT(DISTINCT order_item_id) FROM fact_order_items;` (1 278 404 строки).
 
-3. **`fact_reviews` (Оценки и отзывы клиентов):**
-   > **Одна строка в `fact_reviews` = один оставленный клиентом отзыв к выполненному заказу** с оценкой блюд (`food_rating` 1..5), оценкой работы курьера (`delivery_rating` 1..5) и признаком текстового комментария (`has_comment`). (585 149 строк).
+3. **`fact_courier_shifts` (Рабочие смены курьеров в Яндекс Про):**
+   > **Одна строка в `fact_courier_shifts` = одна индивидуальная рабочая смена курьера** с уникальным `shift_id`, привязкой к курьеру `courier_id`, датой смены `shift_date`, отработанным временем на линии (`hours_online`), числом закрытых доставок (`orders_completed`), базовым доходом, бонусами за пиковые слоты и суммарным начислением (`total_payout`).
+   > *Проверка зерна:* `SELECT COUNT(*) = COUNT(DISTINCT shift_id) FROM fact_courier_shifts;` (144 000 строк).
+
+4. **`fact_reviews` (Оценки и отзывы в приложении):**
+   > **Одна строка в `fact_reviews` = один оставленный клиентом отзыв к выполненному заказу** с уникальным `review_id`, оценкой качества блюд (`food_rating` 1..5), оценкой работы курьера (`delivery_rating` 1..5), тегом причины (`complaint_tag`: `Без нареканий`, `Остыло`, `Долгая доставка`, `Помята упаковка`) и признаком комментария.
+   > *Проверка зерна:* `SELECT COUNT(*) = COUNT(DISTINCT review_id) FROM fact_reviews;` (350 618 строк).
 
 ---
 
@@ -42,6 +47,9 @@ erDiagram
     fact_orders ||--o{ fact_order_items : "order_id"
     dim_menu_items ||--o{ fact_order_items : "item_id"
 
+    dim_couriers ||--o{ fact_courier_shifts : "courier_id"
+    dim_date ||--o{ fact_courier_shifts : "shift_date"
+
     fact_orders ||--o{ fact_reviews : "order_id"
     dim_users ||--o{ fact_reviews : "user_id"
     dim_restaurants ||--o{ fact_reviews : "restaurant_id"
@@ -57,21 +65,44 @@ erDiagram
         bigint restaurant_id FK "ID ресторана"
         bigint courier_id FK "ID курьера"
         int district_id FK "ID района"
-        timestamp order_date "Дата и время заказа"
-        decimal delivery_fee "Плата за доставку"
-        decimal total_amount "Итоговая сумма чека (BYN)"
-        int delivery_time_minutes "Время доставки (мин)"
+        timestamp order_date "Время заказа"
+        varchar tariff "Экспресс | Стандарт | Эконом"
+        varchar weather "Ясно | Дождь | Снегопад"
+        decimal surge_multiplier "Коэффициент Surge (1.0..2.2)"
+        decimal items_subtotal "Стоимость блюд"
+        decimal delivery_fee "Тариф доставки"
+        decimal surge_fee "Надбавка за Surge"
+        decimal discount_amount "Скидка (Яндекс Плюс)"
+        decimal total_amount "Итоговый чек (GMV)"
+        decimal platform_commission "Комиссия платформы (Take Rate)"
+        decimal courier_payout "Выплата курьеру"
+        decimal tip_amount "Чаевые"
+        int cooking_time_min "Время кухни"
+        int transit_time_min "Время пути"
+        int delivery_time_min "Общее время доставки"
         varchar status "Доставлен | Опоздание | Отменен"
     }
 
     fact_order_items {
         bigint order_item_id PK "ID позиции"
         bigint order_id FK "ID заказа"
-        bigint item_id FK "ID блюда в меню"
-        int quantity "Количество порций"
-        decimal unit_price "Цена за единицу (BYN)"
-        decimal item_discount "Скидка на позицию (BYN)"
-        decimal subtotal_amount "Стоимость позиции (BYN)"
+        bigint item_id FK "ID блюда"
+        int quantity "Количество"
+        decimal unit_price "Цена"
+        decimal discount_amount "Скидка"
+        decimal subtotal_amount "Сумма позиции"
+    }
+
+    fact_courier_shifts {
+        bigint shift_id PK "ID смены"
+        bigint courier_id FK "ID курьера"
+        date shift_date "Дата смены"
+        decimal hours_online "Часов на линии"
+        int orders_completed "Выполнено заказов"
+        decimal base_earnings "Базовый доход"
+        decimal bonus_earnings "Бонусы за слоты"
+        decimal tips_total "Чаевые за смену"
+        decimal total_payout "Итоговая выплата"
     }
 
     fact_reviews {
@@ -83,40 +114,16 @@ erDiagram
         timestamp review_date "Дата отзыва"
         int food_rating "Оценка кухни (1..5)"
         int delivery_rating "Оценка доставки (1..5)"
+        varchar complaint_tag "Без нареканий | Остыло | Долгая доставка | Помята упаковка"
         boolean has_comment "Наличие текста отзыва"
     }
 
     dim_districts {
         int district_id PK "ID района"
         varchar district_name "Название района"
-        varchar zone_type "Центральная | Спальная | Промышленная | Пригород"
-        decimal delivery_multiplier "Тарифный коэффициент"
-    }
-
-    dim_menu_items {
-        bigint item_id PK "ID блюда"
-        bigint restaurant_id FK "ID ресторана"
-        varchar name "Название блюда"
-        varchar category "Пицца | Суши | Горячее | Супы | Десерты | Напитки"
-        decimal price "Базовая цена"
-        int weight_grams "Вес в граммах"
-        boolean is_spicy "Острое"
-        boolean is_vegetarian "Вегетарианское"
-    }
-
-    dim_restaurants {
-        bigint restaurant_id PK "ID ресторана"
-        varchar name "Название ресторана"
-        varchar cuisine "Тип кухни"
-        int district_id FK "ID района"
-        decimal rating "Рейтинг заведения"
-    }
-
-    dim_couriers {
-        bigint courier_id PK "ID курьера"
-        varchar name "ФИО курьера"
-        varchar phone "Телефон"
-        varchar vehicle_type "Автомобиль | Электросамокат | Велосипед | Пешком"
+        varchar zone_type "Центр | Спальный | Промзона | Пригород"
+        decimal base_delivery_cost "Базовая стоимость"
+        decimal avg_distance_km "Среднее плечо доставки (км)"
     }
 
     dim_users {
@@ -125,6 +132,35 @@ erDiagram
         varchar phone "Телефон"
         date registration_date "Дата регистрации"
         int district_id FK "Основной район"
+        boolean has_plus_subscription "Подписка Яндекс Плюс"
+    }
+
+    dim_restaurants {
+        bigint restaurant_id PK "ID ресторана"
+        varchar name "Название"
+        varchar cuisine "Кухня"
+        int district_id FK "Район"
+        varchar partnership_tier "Стратегический | Стандартный | Базовый"
+        decimal rating "Рейтинг"
+    }
+
+    dim_menu_items {
+        bigint item_id PK "ID блюда"
+        bigint restaurant_id FK "ID ресторана"
+        varchar name "Название блюда"
+        varchar category "Категория"
+        decimal price "Базовая цена"
+        int weight_grams "Вес"
+        boolean is_spicy "Острое"
+        boolean is_vegetarian "Вегетарианское"
+    }
+
+    dim_couriers {
+        bigint courier_id PK "ID курьера"
+        varchar name "ФИО"
+        varchar phone "Телефон"
+        varchar vehicle_type "Пешком | Электросамокат | Велосипед | Автомобиль"
+        varchar courier_tier "Новичок | Опытный | Топ-курьер"
     }
 
     dim_date {
@@ -132,7 +168,7 @@ erDiagram
         int year "Год"
         int month "Месяц"
         int day_of_week "День недели (1..7)"
-        boolean is_weekend "Выходной день"
+        boolean is_weekend "Выходной"
     }
 ```
 
@@ -142,14 +178,15 @@ erDiagram
 
 | Таблица | Роль в модели | Первичный ключ (PK) | Основные атрибуты | Политика SCD | Обоснование выбора SCD |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **`fact_orders`** | Таблица фактов | `order_id` | `order_date`, `status`, `total_amount`, `delivery_time_minutes` | **Append Only** | Событие оформления и исполнения заказа. |
-| **`fact_order_items`** | Таблица фактов | `order_item_id` | `quantity`, `unit_price`, `subtotal_amount` | **Append Only** | Товарный состав чека неизменен после оплаты. |
-| **`fact_reviews`** | Таблица фактов | `review_id` | `food_rating`, `delivery_rating`, `has_comment` | **Append Only** | Отзыв клиента фиксирует оценку на момент доставки. |
-| **`dim_couriers`** | Измерение | `courier_id` | `name`, `phone`, `vehicle_type` | **SCD2 (храним историю)** | **Реализовано на З06 (см. [scd2.md](scd2.md)):** Курьер меняет транспорт (`Пешком` $\to$ `Электросамокат` $\to$ `Автомобиль`). При затирании старого значения (SCD1) исторический анализ SLA и скорости доставки исказится. |
-| **`dim_menu_items`** | Измерение | `item_id` | `name`, `category`, `price`, `weight_grams` | **SCD1 / SCD2** | Изменение базовой цены в меню затирается (SCD1), так как историческая фактическая цена продажи зафиксирована в факте `fact_order_items.unit_price`. |
-| **`dim_restaurants`** | Измерение | `restaurant_id` | `name`, `cuisine`, `district_id`, `rating` | **SCD1 (затираем старое)** | Смена вывески или пересчёт текущего рейтинга перезаписывается поверх. |
-| **`dim_users`** | Измерение | `user_id` | `name`, `phone`, `registration_date`, `district_id` | **SCD1 (затираем старое)** | Обновление номера телефона или района проживания. |
-| **`dim_districts`** | Измерение | `district_id` | `district_name`, `zone_type`, `delivery_multiplier` | **SCD1 (затираем старое)** | Корректировка границ или коэффициентов зоны. |
+| **`fact_orders`** | Таблица фактов | `order_id` | `order_date`, `status`, `total_amount`, `surge_multiplier`, `platform_commission`, `courier_payout` | **Append Only** | Событие оформления и исполнения заказа. |
+| **`fact_order_items`** | Таблица фактов | `order_item_id` | `quantity`, `unit_price`, `subtotal_amount` | **Append Only** | Товарный состав чека неизменен после покупки. |
+| **`fact_courier_shifts`**| Таблица фактов | `shift_id` | `hours_online`, `orders_completed`, `total_payout` | **Append Only** | Фиксация закрытой рабочей смены в Яндекс Про. |
+| **`fact_reviews`** | Таблица фактов | `review_id` | `food_rating`, `delivery_rating`, `complaint_tag` | **Append Only** | Оценка клиента на момент доставки. |
+| **`dim_couriers`** | Измерение | `courier_id` | `name`, `vehicle_type`, `courier_tier` | **SCD2 (храним историю)** | **Реализовано на З06 (см. [scd2.md](scd2.md)):** Курьер меняет транспорт и грейд в Яндекс Про (`Пешком / Новичок` $\to$ `Электросамокат / Опытный` $\to$ `Автомобиль / Топ-курьер`). При затирании старого значения (SCD1) исказится ретроспективный анализ скорости и SLA. |
+| **`dim_menu_items`** | Измерение | `item_id` | `name`, `category`, `price`, `weight_grams` | **SCD1** | Базовая цена меню затирается, фактическая историческая цена продажи зафиксирована в факте чека `fact_order_items.unit_price`. |
+| **`dim_restaurants`** | Измерение | `restaurant_id` | `name`, `cuisine`, `partnership_tier`, `rating` | **SCD1** | Смена уровня комиссии или рейтинга перезаписывается поверх. |
+| **`dim_users`** | Измерение | `user_id` | `name`, `phone`, `has_plus_subscription` | **SCD1** | Смена номера телефона или статуса подписки. |
+| **`dim_districts`** | Измерение | `district_id` | `district_name`, `zone_type`, `base_delivery_cost` | **SCD1** | Корректировка границ и тарифов зоны. |
 | **`dim_date`** | Измерение | `date_key` | `year`, `month`, `day_of_week`, `is_weekend` | **Статичный (SCD0)** | Календарная сетка постоянна. |
 
 ---
@@ -158,27 +195,27 @@ erDiagram
 
 | Мера / Поле | Тип агрегации | Можно ли просто `SUM`? | Описание и формула расчёта |
 | :--- | :--- | :---: | :--- |
-| **Выручка по доставленным заказам (Net GMV)** | Аддитивная | **Да** | `SUM(total_amount) WHERE status IN ('Доставлен', 'Опоздание')`. Главная бизнес-метрика. |
-| **Валовой объём заказов (Gross GMV)** | Аддитивная | **Да** | `SUM(total_amount)` по всем созданным заказам. |
-| **Товарная выручка от блюд (Items Revenue)** | Аддитивная | **Да** | `SUM(subtotal_amount)` в таблице `fact_order_items`. |
-| **Выручка за доставку (Delivery Revenue)** | Аддитивная | **Да** | `SUM(delivery_fee) WHERE status != 'Отменен'`. |
-| **Количество проданных порций (Portions Qty)** | Аддитивная | **Да** | `SUM(quantity)` в таблице `fact_order_items`. |
+| **Выручка по доставленным заказам (Net GMV)** | Аддитивная | **Да** | `SUM(total_amount) WHERE status IN ('Доставлен', 'Опоздание')`. Главная бизнес-метрика товарооборота. |
+| **Комиссионная выручка Яндекса (Platform Commission)**| Аддитивная | **Да** | `SUM(platform_commission)` — чистая комиссия маркетплейса с ресторанов (Take Rate 18..28%). |
+| **Выручка за логистику (Delivery Revenue)** | Аддитивная | **Да** | `SUM(delivery_fee + surge_fee)` — суммарная оплата клиентами доставки и надбавок за Surge. |
+| **Выплаты курьерам (Courier Payouts)** | Аддитивная | **Да** | `SUM(courier_payout)` — фонд оплаты труда курьеров платформы. |
+| **Чистая операционная маржа (Platform Net Margin)** | Аддитивная | **Да** | `SUM(platform_commission + delivery_fee + surge_fee - courier_payout)`. |
+| **Чаевые курьерам (Tips Volume)** | Аддитивная | **Да** | `SUM(tip_amount)` в заказах и `SUM(tips_total)` в сменах. |
 | **Количество заказов (Orders Count)** | Аддитивная | **Да** (`COUNT`) | `COUNT(order_id)`. |
-| **Количество отзывов (Reviews Count)** | Аддитивная | **Да** (`COUNT`) | `COUNT(review_id)` в `fact_reviews`. |
-| **Средний чек заказа (AOV)** | Неаддитивная | **Нет** | `SUM(total_amount) / COUNT(order_id)`. |
-| **Среднее время доставки (Avg Delivery Time)** | Неаддитивная | **Нет** | `AVG(delivery_time_minutes)`. |
+| **Отработано часов на линии (Hours Online)** | Аддитивная | **Да** | `SUM(hours_online)` в `fact_courier_shifts`. |
+| **Средний коэффициент повышенного спроса (Avg Surge)**| Неаддитивная | **Нет** | `AVG(surge_multiplier)` (1.00..2.20). |
+| **Среднее время кухни (Avg Cooking Time)** | Неаддитивная | **Нет** | `AVG(cooking_time_min)`. |
+| **Среднее время курьера в пути (Avg Transit Time)** | Неаддитивная | **Нет** | `AVG(transit_time_min)`. |
 | **Доля опозданий (Late Delivery Rate, %)** | Неаддитивная | **Нет** | `COUNT(*) FILTER (WHERE status = 'Опоздание') * 100.0 / COUNT(*)`. |
-| **Средний рейтинг блюд (Avg Food Rating)** | Неаддитивная | **Нет** | `AVG(food_rating)` в `fact_reviews` (1.00..5.00). |
-| **Средний рейтинг курьера (Avg Delivery Rating)**| Неаддитивная | **Нет** | `AVG(delivery_rating)` в `fact_reviews` (1.00..5.00). |
-| **Уникальные активные клиенты (MAU / DAU)** | Неаддитивная | **Нет** (`COUNT DISTINCT`) | `COUNT(DISTINCT user_id)`. |
+| **Производительность курьера (Orders per Hour)** | Неаддитивная | **Нет** | `SUM(orders_completed) / SUM(hours_online)`. |
 
 ---
 
 ## 5. Главная метрика проекта
 
-- **Название:** Выручка по выполненным заказам (**Net GMV** / Оборот без учёта отмен).
-- **Бизнес-смысл:** Реальный денежный поток компании от завершённых доставок.
-- **Зафиксированное эталонное значение на датасете:** **`54 595 838.25 BYN`** (по **`899 763`** выполненным заказам: 849 845 доставлено в срок + 49 918 с опозданием; отменено: 100 237 заказов; валовой оборот Gross GMV: `60 648 870.64 BYN`).
+- **Название:** Выручка по выполненным заказам (**Net GMV** / Оборот доставленных заказов).
+- **Бизнес-смысл:** Совокупный объём платежей клиентов за успешно доставленные заказы.
+- **Зафиксированное эталонное значение на датасете:** **`27 399 331.21 BYN`** (по **`539 801`** выполненным заказам: 509 780 доставлено в срок + 30 021 с опозданием; 60 199 отмен; комиссионная выручка Яндекса: `5 499 204.05 BYN`; выплаты курьерам: `4 876 167.06 BYN`).
 - **Эталонный SQL (`sql/canonical_metric.sql`):**
 
 ```sql
@@ -193,9 +230,9 @@ WHERE status IN ('Доставлен', 'Опоздание');
 
 ## 6. Три аналитических вопроса к витрине (для З04)
 
-1. **Товарная аналитика и структура спроса по категориям блюд:**
-   *«Какие категории блюд (`category`: Пицца, Суши, Горячее, Супы, Десерты...) приносят наибольшую выручку, каков объём проданных порций, средняя цена блюда, а также доля выручки каждой категории внутри каждого месяца с ранжированием категорий по доле продаж (`DENSE_RANK()`)?»*
-2. **Операционная эффективность транспорта, SLA и клиентская оценка:**
-   *«Каково среднее время доставки, процент опозданий (>60 мин) и средняя клиентская оценка курьера (`delivery_rating` из `fact_reviews`) в разрезе видов транспорта курьера (`vehicle_type`) в часы пик (12:00–13:59 и 18:00–19:59) против остальных часов?»*
-3. **Географическая сегментация районов и рейтинг качества еды:**
-   *«Каков объём выручки (Net GMV), средний чек заказа, средняя стоимость доставки (`delivery_fee`) и средняя оценка качества блюд (`food_rating`) по районам города (`district_name`, `zone_type`), а также доля каждого района в общегородском обороте?»*
+1. **Юнит-экономика платформы и Take Rate комиссии Яндекса по кухням в динамике:**
+   *«Каков валовой товарооборот (GMV), комиссионная выручка Яндекса (platform_commission), выплаты курьерам и чистая операционная прибыль платформы в разрезе типов кухонь помесячно, а также доля комиссии каждой кухни в ежемесячной прибыли (`SUM() OVER (PARTITION BY order_month)`) и ранг кухни по выручке (`DENSE_RANK()`)?»*
+2. **Динамическое ценообразование Surge, погодные аномалии и SLA доставки:**
+   *«Как погодные условия (`weather`: Ясно, Дождь, Снегопад) и тариф доставки (`tariff`: Экспресс, Стандарт, Эконом) влияют на средний коэффициент повышенного спроса (`surge_multiplier`), надбавку за Surge (`surge_fee`), среднее время доставки и процент опозданий (>60 минут) в часы пик против обычных часов?»*
+3. **Логистическая выработка курьеров и утилизация смен в Яндекс Про:**
+   *«Какова средняя выработка курьеров за смену (заказов в час: `orders_completed / hours_online`), средний часовой заработок (`total_payout / hours_online`) и структура бонусов в разрезе типов транспорта (`vehicle_type`) и грейдов (`courier_tier`: Топ-курьер, Опытный, Новичок), а также рейтинг доходности грейдов через оконную функцию `RANK() OVER (ORDER BY avg_hourly_payout_byn DESC)`?»*

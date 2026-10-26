@@ -1,25 +1,26 @@
 =================================================================
-ОТЧЁТ ПО З03: ПРОВЕРКИ ТАБЛИЦ В DUCKDB
+ОТЧЁТ ПО З03: ПРОВЕРКИ ТАБЛИЦ В DUCKDB (ЯНДЕКС ДОСТАВКА)
 =================================================================
 
---- 1. Число строк во всех таблицах модели ---
-      table_name                 role    rows
-   dim_districts            Измерение      12
-       dim_users            Измерение  100000
- dim_restaurants            Измерение     250
-  dim_menu_items            Измерение    2500
-    dim_couriers            Измерение     800
-        dim_date            Измерение     366
-     fact_orders        ФАКТ (Заказы) 1000000
-fact_order_items ФАКТ (Позиции чеков) 2601720
-    fact_reviews        ФАКТ (Отзывы)  585149
+--- 1. Число строк во всех 10 таблицах модели ---
+         table_name                  role    rows
+      dim_districts             Измерение      12
+          dim_users             Измерение  100000
+    dim_restaurants             Измерение     250
+     dim_menu_items             Измерение    2500
+       dim_couriers             Измерение     800
+           dim_date             Измерение     366
+        fact_orders         ФАКТ (Заказы)  600000
+   fact_order_items  ФАКТ (Позиции чеков) 1278404
+fact_courier_shifts ФАКТ (Смены курьеров)  144000
+       fact_reviews         ФАКТ (Отзывы)  350618
 
 --- 2. Проверка целостности внешних ключей (Broken Links / Orphans = 0) ---
  missing_users  missing_restaurants  missing_couriers  missing_districts
              0                    0                 0                  0
 
---- 3. Главная мера (Net GMV) и валовой объём (Gross GMV) ---
- total_orders  delivered_orders  net_gmv_byn  gross_gmv_byn
-      1000000            899763  54595838.25    60648870.64
+--- 3. Главная мера (Net GMV) и финансовый сплит платформы ---
+ total_orders  delivered_orders  net_gmv_byn  yandex_commission_byn  courier_payout_byn  avg_surge_multiplier
+       600000            539801  27399331.21             5499204.05          4876167.06                  1.36
 
 Вывод: данные согласованы с сырьём, отсутствуют NULL и сироты, главная мера зафиксирована.

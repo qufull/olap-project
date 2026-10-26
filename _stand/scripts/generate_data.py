@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
-"""Генератор расширенного учебного датасета «Доставка еды» (Constellation Schema) -> data/raw/*.csv.
+"""Генератор датасета масштаба «Яндекс Доставка» (Yandex Food & Express Delivery OLAP).
+Архитектура: Fact Constellation Schema.
 
 Таблицы фактов:
-    * fact_orders (заказы на уровне чека)
-    * fact_order_items (товарные позиции заказов / детализация блюд)
-    * fact_reviews (оценки и отзывы клиентов)
+    * fact_orders (Заказы: Surge-коэффициенты, погода, тарифы, финансовый сплит, тайминги этапов)
+    * fact_order_items (Детализация блюд в чеке)
+    * fact_courier_shifts (Смены курьеров в Яндекс Про: часы на линии, выработка, бонусы)
+    * fact_reviews (Отзывы клиентов: оценки, теги проблем: Остыло, Долгая доставка и др.)
 
 Справочники (измерения):
-    * dim_users (пользователи/клиенты)
-    * dim_restaurants (рестораны)
-    * dim_menu_items (меню ресторанов)
-    * dim_couriers (курьеры)
-    * dim_districts (районы города)
+    * dim_districts (Районы города, зоны доставки, средние расстояния)
+    * dim_users (Клиенты с признаком Яндекс Плюс подписки)
+    * dim_restaurants (Рестораны и партнерские уровни комиссии Take Rate)
+    * dim_menu_items (Каталог блюд)
+    * dim_couriers (Курьеры логистической сети, кандидат на SCD2)
 """
 import argparse
 from pathlib import Path
@@ -48,18 +50,18 @@ SURNAMES = ("Иванов Петров Сидоров Смирнов Кузне�
             "Новицкий Островский Котов Рогов").split()
 
 DISTRICTS_DATA = [
-    (1, "Центральный", "Центральная", 1.0),
-    (2, "Советский", "Центральная", 1.0),
-    (3, "Первомайский", "Спальная", 1.1),
-    (4, "Партизанский", "Промышленная", 1.2),
-    (5, "Заводской", "Промышленная", 1.2),
-    (6, "Ленинский", "Спальная", 1.1),
-    (7, "Октябрьский", "Спальная", 1.1),
-    (8, "Московский", "Спальная", 1.1),
-    (9, "Фрунзенский", "Спальная", 1.1),
-    (10, "Каменная Горка", "Спальная", 1.2),
-    (11, "Уручье", "Спальная", 1.2),
-    (12, "Новая Боровая", "Пригород", 1.3),
+    (1, "Центральный", "Центр", 3.50, 3.2),
+    (2, "Советский", "Центр", 3.50, 3.8),
+    (3, "Первомайский", "Спальный", 4.00, 5.5),
+    (4, "Партизанский", "Промзона", 4.50, 7.2),
+    (5, "Заводской", "Промзона", 4.50, 8.0),
+    (6, "Ленинский", "Спальный", 4.00, 6.1),
+    (7, "Октябрьский", "Спальный", 4.00, 5.8),
+    (8, "Московский", "Спальный", 4.00, 5.2),
+    (9, "Фрунзенский", "Спальный", 4.00, 5.9),
+    (10, "Каменная Горка", "Спальный", 4.50, 7.5),
+    (11, "Уручье", "Спальный", 4.50, 8.4),
+    (12, "Новая Боровая", "Пригород", 5.50, 10.5),
 ]
 
 CUISINES = {
@@ -194,7 +196,7 @@ CUISINES = {
 }
 
 PLACES = ["центр", "север", "юг", "восток", "запад", "парк", "площадь", "рынок", "проспект", "набережная"]
-VEHICLES = {"Электросамокат": (0.29, 36), "Велосипед": (0.27, 42), "Пешком": (0.24, 50), "Автомобиль": (0.20, 32)}
+VEHICLES = {"Электросамокат": (0.35, 34), "Велосипед": (0.25, 40), "Пешком": (0.15, 48), "Автомобиль": (0.25, 30)}
 STATUS_P = {"Доставлен": 0.85, "Отменен": 0.10, "Опоздание": 0.05}
 HOUR_W = np.array([2, 5, 9, 8, 4, 3, 4, 7, 10, 10, 7, 4, 2, 1], float)
 
@@ -209,9 +211,8 @@ def make_fio(rng, n):
     female = rng.random(n) < 0.5
     sn = rng.choice(SURNAMES, n)
     pt = rng.integers(0, len(PATR), n)
-    out = [f"{fem(sn[i]) if female[i] else sn[i]} {rng.choice(FEMALE if female[i] else MALE)} {PATR[pt[i]][1 if female[i] else 0]}"
-           for i in range(n)]
-    return out
+    return [f"{fem(sn[i]) if female[i] else sn[i]} {rng.choice(FEMALE if female[i] else MALE)} {PATR[pt[i]][1 if female[i] else 0]}"
+            for i in range(n)]
 
 def make_phones(rng, n):
     seen = set()
@@ -232,17 +233,20 @@ def make_phones(rng, n):
                     break
     return out
 
-def generate_all(n_users, n_rest, n_cour, n_orders, start, end, seed):
+def generate_yandex_dw(n_users=100000, n_rest=250, n_cour=800, n_orders=1000000,
+                       start="2025-10-01", end="2026-09-30", seed=42):
     rng = np.random.default_rng(seed)
     days = pd.date_range(start, end, freq="D")
     span = (days[-1] - pd.Timestamp(start)).days + 1
 
-    print("[1/5] Генерация справочников (районы, рестораны, меню, курьеры, пользователи)...")
+    print("[1/6] Генерация справочников Яндекс Доставки...")
     # 1. Районы
-    districts = pd.DataFrame(DISTRICTS_DATA, columns=["district_id", "district_name", "zone_type", "delivery_multiplier"])
+    districts = pd.DataFrame(DISTRICTS_DATA, columns=[
+        "district_id", "district_name", "zone_type", "base_delivery_cost", "avg_distance_km"
+    ])
     n_dist = len(districts)
 
-    # 2. Рестораны
+    # 2. Рестораны и уровни комиссии Take Rate (Стратегический: 18%, Стандарт: 22%, Базовый: 28%)
     cuis = list(CUISINES)
     w = np.array([CUISINES[c]["weight"] for c in cuis], float)
     r_cuisine = rng.choice(cuis, n_rest, p=w / w.sum())
@@ -260,61 +264,64 @@ def generate_all(n_users, n_rest, n_cour, n_orders, start, end, seed):
             cand = f"{nm}, {place}" + (f" №{k // len(PLACES) + 1}" if k > len(PLACES) else "")
         used.add(cand)
         r_name[i] = cand
-    r_rating = np.clip(rng.normal(4.1, 0.45, n_rest), 3.0, 5.0).round(1)
+
+    r_rating = np.clip(rng.normal(4.2, 0.45, n_rest), 3.0, 5.0).round(1)
     r_dist = rng.integers(1, n_dist + 1, n_rest)
+    r_tier = rng.choice(["Стратегический (18%)", "Стандартный (22%)", "Базовый (28%)"], n_rest, p=[0.25, 0.50, 0.25])
+    r_take_rate = np.where(r_tier == "Стратегический (18%)", 0.18, np.where(r_tier == "Стандартный (22%)", 0.22, 0.28))
+
     rests = pd.DataFrame({
         "restaurant_id": np.arange(1, n_rest + 1),
         "name": r_name,
         "cuisine": r_cuisine,
         "district_id": r_dist,
+        "partnership_tier": r_tier,
         "rating": r_rating
     })
 
-    # 3. Меню ресторанов (dim_menu_items)
+    # 3. Меню ресторанов
     menu_items_list = []
     item_id_counter = 1
-    # Словарь быстрых индексов: rest_id -> [список item_id и их цен]
-    rest_menu_map = {}
     for r_idx in range(n_rest):
         r_id = r_idx + 1
         c_name = r_cuisine[r_idx]
         items_template = CUISINES[c_name]["items"]
-        cur_items = []
         for (i_name, cat, price, weight, spicy, veg) in items_template:
-            # Небольшая вариация цены (+/- 10%)
             var_price = round(price * rng.uniform(0.9, 1.1), 2)
             menu_items_list.append((item_id_counter, r_id, i_name, cat, var_price, weight, spicy, veg))
-            cur_items.append((item_id_counter, var_price))
             item_id_counter += 1
-        rest_menu_map[r_id] = cur_items
 
     menu_df = pd.DataFrame(menu_items_list, columns=[
         "item_id", "restaurant_id", "name", "category", "price", "weight_grams", "is_spicy", "is_vegetarian"
     ])
 
-    # 4. Курьеры
+    # 4. Курьеры логистической сети Яндекс Про (SCD2 кандидат)
     veh = rng.choice(list(VEHICLES), n_cour, p=[v[0] for v in VEHICLES.values()])
+    c_tier = rng.choice(["Новичок", "Опытный", "Топ-курьер"], n_cour, p=[0.20, 0.55, 0.25])
     couriers = pd.DataFrame({
         "courier_id": np.arange(1, n_cour + 1),
         "name": make_fio(rng, n_cour),
         "phone": make_phones(rng, n_cour),
-        "vehicle_type": veh
+        "vehicle_type": veh,
+        "courier_tier": c_tier
     })
 
-    # 5. Пользователи
+    # 5. Клиенты платформы (35% с подпиской Яндекс Плюс)
     before = rng.random(n_users) < 0.75
     off = np.where(before, -rng.integers(1, 366, n_users), rng.integers(0, span, n_users))
     reg = pd.Timestamp(start) + pd.to_timedelta(off, "D")
     u_dist = rng.integers(1, n_dist + 1, n_users)
+    has_plus = rng.random(n_users) < 0.35
     users = pd.DataFrame({
         "user_id": np.arange(1, n_users + 1),
         "name": make_fio(rng, n_users),
         "phone": make_phones(rng, n_users),
         "registration_date": reg.strftime("%Y-%m-%d"),
-        "district_id": u_dist
+        "district_id": u_dist,
+        "has_plus_subscription": has_plus
     })
 
-    print(f"[2/5] Генерация {n_orders:,} заказов (fact_orders)...")
+    print(f"[2/6] Генерация {n_orders:,} заказов Яндекс Доставки (fact_orders)...")
     reg_day_u = np.clip((reg - days[0]).days.to_numpy(), 0, len(days) - 1)
     uw = rng.lognormal(0, 0.7, n_users) * (len(days) - reg_day_u) / len(days)
     user_idx = rng.choice(n_users, n_orders, p=uw / uw.sum())
@@ -323,7 +330,7 @@ def generate_all(n_users, n_rest, n_cour, n_orders, start, end, seed):
     rest_idx = rng.choice(n_rest, n_orders, p=rw / rw.sum())
     cour_idx = rng.integers(0, n_cour, n_orders)
 
-    dw = np.where(days.dayofweek >= 4, 1.35, 1.0) * np.linspace(0.95, 1.15, len(days))
+    dw = np.where(days.day_of_week >= 4, 1.35, 1.0) * np.linspace(0.95, 1.15, len(days))
     day_idx = rng.choice(len(days), n_orders, p=dw / dw.sum())
     reg_day = reg_day_u[user_idx]
     for _ in range(30):
@@ -337,40 +344,54 @@ def generate_all(n_users, n_rest, n_cour, n_orders, start, end, seed):
     order_dt = (days[day_idx] + pd.to_timedelta(hour, "h") + pd.to_timedelta(rng.integers(0, 3600, n_orders), "s"))
     order_sort = np.argsort(order_dt, kind="stable")
     user_idx, rest_idx, cour_idx, order_dt = user_idx[order_sort], rest_idx[order_sort], cour_idx[order_sort], order_dt[order_sort]
+    hour = hour[order_sort]
 
+    # Погода (Ясно 70%, Дождь 20%, Снегопад 10%)
+    weather = rng.choice(["Ясно", "Дождь", "Снегопад"], n_orders, p=[0.70, 0.20, 0.10])
+    tariff = rng.choice(["Стандарт", "Экспресс", "Эконом"], n_orders, p=[0.60, 0.30, 0.10])
+
+    # Коэффициент повышенного спроса (Surge multiplier: 1.0..2.2)
+    is_peak_hour = np.isin(hour, [12, 13, 18, 19, 20])
+    is_bad_weather = (weather != "Ясно")
+    surge_base = np.where(is_peak_hour & is_bad_weather, 1.6, np.where(is_peak_hour | is_bad_weather, 1.3, 1.0))
+    surge_mult = np.clip(np.round(surge_base * rng.uniform(0.9, 1.25, n_orders), 2), 1.00, 2.20)
+
+    # Статусы
     status = rng.choice(list(STATUS_P), n_orders, p=list(STATUS_P.values()))
-    base_t = np.array([VEHICLES[v][1] for v in veh])[cour_idx]
-    t_ok = np.clip(base_t + rng.normal(0, 9, n_orders), 15, 60)
-    t_late = np.clip(base_t + 30 + rng.normal(0, 12, n_orders), 61, 120)
-    t = pd.array(np.where(status == "Опоздание", t_late, t_ok).round(), dtype="Int64")
-    t[status == "Отменен"] = pd.NA
 
-    # Район доставки заказа (по умолчанию район пользователя в 80% случаев, иначе случайный)
+    # Время приготовления (cooking_time) и доставки (transit_time)
+    cooking_t = np.clip(rng.normal(20, 5, n_orders).round(), 10, 45).astype(int)
+    base_transit = np.array([VEHICLES[v][1] for v in veh])[cour_idx]
+    weather_delay = np.where(weather == "Снегопад", 12, np.where(weather == "Дождь", 6, 0))
+    transit_t_ok = np.clip(base_transit + weather_delay + rng.normal(0, 7, n_orders), 12, 55).round().astype(int)
+    transit_t_late = np.clip(base_transit + 35 + weather_delay + rng.normal(0, 10, n_orders), 45, 95).round().astype(int)
+    transit_t = np.where(status == "Опоздание", transit_t_late, transit_t_ok)
+    total_delivery_t = pd.array(cooking_t + transit_t, dtype="Int64")
+    total_delivery_t[status == "Отменен"] = pd.NA
+
+    # Район доставки заказа
     order_dist = np.where(rng.random(n_orders) < 0.80, u_dist[user_idx], rng.integers(1, n_dist + 1, n_orders))
-    delivery_fee = np.round(rng.choice([3.50, 4.00, 5.00, 6.00], n_orders, p=[0.4, 0.3, 0.2, 0.1]), 2)
+    base_deliv_cost = districts.set_index("district_id")["base_delivery_cost"].to_numpy()[order_dist - 1]
+    tariff_mult = np.where(tariff == "Экспресс", 1.4, np.where(tariff == "Эконом", 0.85, 1.0))
+    deliv_fee = np.round(base_deliv_cost * tariff_mult, 2)
+    surge_fee = np.round(deliv_fee * (surge_mult - 1.0), 2)
 
-    print(f"[3/5] Генерация товарных позиций в чеках (fact_order_items)...")
-    # Количество позиций в заказе от 1 до 5
-    items_cnt = rng.choice([1, 2, 3, 4, 5], n_orders, p=[0.15, 0.35, 0.30, 0.15, 0.05])
+    print(f"[3/6] Генерация товарных позиций в чеках (fact_order_items)...")
+    items_cnt = rng.choice([1, 2, 3, 4], n_orders, p=[0.25, 0.45, 0.22, 0.08])
     total_items = np.sum(items_cnt)
 
     item_order_ids = np.repeat(np.arange(1, n_orders + 1), items_cnt)
     item_rest_ids = np.repeat(rest_idx + 1, items_cnt)
-
-    # Выбираем случайное блюдо из меню конкретного ресторана (у каждого по 10 блюд: offset 0..9)
     dish_offset = rng.integers(0, 10, total_items)
-    # item_id = (rest_id - 1) * 10 + dish_offset + 1
     chosen_item_ids = (item_rest_ids - 1) * 10 + dish_offset + 1
-    quantities = rng.choice([1, 2, 3], total_items, p=[0.80, 0.16, 0.04])
+    quantities = rng.choice([1, 2, 3], total_items, p=[0.82, 0.15, 0.03])
 
-    # Получаем цены блюд
     item_prices = menu_df.set_index("item_id")["price"].to_numpy()
     chosen_prices = item_prices[chosen_item_ids - 1]
 
-    # Скидка на позицию (в 10% случаев небольшая скидка 1-3 BYN)
-    has_disc = rng.random(total_items) < 0.10
-    discounts = np.where(has_disc, np.round(rng.uniform(1.0, 3.5, total_items), 2), 0.0)
-    subtotals = np.round(np.maximum(quantities * chosen_prices - discounts, 1.0), 2)
+    has_disc = rng.random(total_items) < 0.12
+    item_discounts = np.where(has_disc, np.round(rng.uniform(1.0, 3.0, total_items), 2), 0.0)
+    subtotals = np.round(np.maximum(quantities * chosen_prices - item_discounts, 1.0), 2)
 
     order_items_df = pd.DataFrame({
         "order_item_id": np.arange(1, total_items + 1),
@@ -378,13 +399,29 @@ def generate_all(n_users, n_rest, n_cour, n_orders, start, end, seed):
         "item_id": chosen_item_ids,
         "quantity": quantities,
         "unit_price": chosen_prices,
-        "item_discount": discounts,
+        "discount_amount": item_discounts,
         "subtotal_amount": subtotals
     })
 
-    # Считаем total_amount заказа строго как сумма блюд + стоимость доставки
-    order_subtotals = np.bincount(item_order_ids, weights=subtotals)[1:]
-    order_total = np.round(order_subtotals + delivery_fee, 2)
+    # Считаем финансовый сплит заказа
+    items_subtotal = np.round(np.bincount(item_order_ids, weights=subtotals)[1:], 2)
+    # Скидка по Яндекс Плюсу (кешбэк баллами)
+    user_has_plus = has_plus[user_idx]
+    order_discount = np.where(user_has_plus & (rng.random(n_orders) < 0.40), np.round(items_subtotal * 0.10, 2), 0.0)
+    total_order_amount = np.round(items_subtotal + deliv_fee + surge_fee - order_discount, 2)
+
+    # Комиссия Яндекс Доставки (Take Rate от стоимости блюд)
+    rest_rates = r_take_rate[rest_idx]
+    platform_comm = np.round(items_subtotal * rest_rates, 2)
+
+    # Выплата курьеру за доставку (базовая ставка + Surge надбавка курьеру 70% + километр)
+    dist_km = districts.set_index("district_id")["avg_distance_km"].to_numpy()[order_dist - 1]
+    courier_pay = np.round(4.00 + (dist_km * 0.60) + (surge_fee * 0.70), 2)
+    courier_pay = np.where(status == "Отменен", 0.0, courier_pay)
+
+    # Чаевые (в 15% заказов оставляют 2-10 BYN)
+    has_tip = (status != "Отменен") & (rng.random(n_orders) < 0.15)
+    tip_amt = np.where(has_tip, rng.choice([2.0, 3.0, 5.0, 7.0, 10.0], n_orders, p=[0.4, 0.3, 0.15, 0.1, 0.05]), 0.0)
 
     orders_df = pd.DataFrame({
         "order_id": np.arange(1, n_orders + 1),
@@ -393,31 +430,66 @@ def generate_all(n_users, n_rest, n_cour, n_orders, start, end, seed):
         "courier_id": couriers["courier_id"].to_numpy()[cour_idx],
         "district_id": order_dist,
         "order_date": order_dt.strftime("%Y-%m-%d %H:%M:%S"),
-        "delivery_fee": delivery_fee,
-        "total_amount": order_total,
-        "delivery_time_minutes": t,
+        "tariff": tariff,
+        "weather": weather,
+        "surge_multiplier": surge_mult,
+        "items_subtotal": items_subtotal,
+        "delivery_fee": deliv_fee,
+        "surge_fee": surge_fee,
+        "discount_amount": order_discount,
+        "total_amount": total_order_amount,
+        "platform_commission": platform_comm,
+        "courier_payout": courier_pay,
+        "tip_amount": tip_amt,
+        "cooking_time_min": cooking_t,
+        "transit_time_min": transit_t,
+        "delivery_time_min": total_delivery_t,
         "status": status
     })
 
-    print(f"[4/5] Генерация отзывов клиентов (fact_reviews)...")
-    # Отзывы оставляют только по доставленным заказам (Доставлен или Опоздание)
+    print(f"[4/6] Генерация смен курьеров Яндекс Про (fact_courier_shifts)...")
+    # Каждый курьер отрабатывает ~180 смен за год
+    shift_courier_ids = np.repeat(np.arange(1, n_cour + 1), 180)
+    n_shifts = len(shift_courier_ids)
+    shift_dates = rng.choice(days, n_shifts)
+    hours_online = np.round(rng.uniform(4.0, 10.5, n_shifts), 1)
+    orders_done = np.clip(np.round(hours_online * rng.uniform(1.3, 2.3)), 3, 22).astype(int)
+    base_earn = np.round(orders_done * rng.uniform(5.5, 7.5), 2)
+    bonus_earn = np.where(rng.random(n_shifts) < 0.40, np.round(rng.uniform(10.0, 35.0, n_shifts), 2), 0.0)
+    tips_tot = np.round(orders_done * rng.uniform(0.5, 2.0), 2)
+    total_payout = np.round(base_earn + bonus_earn + tips_tot, 2)
+
+    shifts_df = pd.DataFrame({
+        "shift_id": np.arange(1, n_shifts + 1),
+        "courier_id": shift_courier_ids,
+        "shift_date": pd.to_datetime(shift_dates).strftime("%Y-%m-%d"),
+        "hours_online": hours_online,
+        "orders_completed": orders_done,
+        "base_earnings": base_earn,
+        "bonus_earnings": bonus_earn,
+        "tips_total": tips_tot,
+        "total_payout": total_payout
+    })
+
+    print(f"[5/6] Генерация оценок и тегов обратной связи (fact_reviews)...")
     deliv_mask = (status == "Доставлен") | (status == "Опоздание")
     deliv_indices = np.where(deliv_mask)[0]
-    # Примерно 65% клиентов оставляют отзыв
     review_mask = rng.random(len(deliv_indices)) < 0.65
     chosen_review_orders = deliv_indices[review_mask]
     n_reviews = len(chosen_review_orders)
 
-    # Оценка еды зависит от рейтинга ресторана
     rev_rest_ratings = r_rating[rest_idx[chosen_review_orders]]
     food_r = np.clip(np.round(rng.normal(rev_rest_ratings, 0.6)), 1, 5).astype(int)
-
-    # Оценка доставки: если опоздание - оценка ниже
     is_late = (status[chosen_review_orders] == "Опоздание")
     deliv_r = np.where(
         is_late,
         rng.choice([1, 2, 3], n_reviews, p=[0.45, 0.40, 0.15]),
         rng.choice([3, 4, 5], n_reviews, p=[0.10, 0.35, 0.55])
+    )
+    complaints = np.where(
+        is_late, "Долгая доставка",
+        np.where(food_r <= 2, "Остыло",
+                 np.where(rng.random(n_reviews) < 0.05, "Помята упаковка", "Без нареканий"))
     )
     has_comment = rng.random(n_reviews) < 0.25
     review_dt = (order_dt[chosen_review_orders] + pd.to_timedelta(rng.integers(1800, 86400, n_reviews), "s"))
@@ -431,39 +503,41 @@ def generate_all(n_users, n_rest, n_cour, n_orders, start, end, seed):
         "review_date": review_dt.strftime("%Y-%m-%d %H:%M:%S"),
         "food_rating": food_r,
         "delivery_rating": deliv_r,
+        "complaint_tag": complaints,
         "has_comment": has_comment
     })
 
-    print("[5/5] Проверки ссылочной целостности...")
+    print("[6/6] Проверка ссылочной целостности...")
     assert order_items_df["order_id"].isin(orders_df["order_id"]).all()
     assert order_items_df["item_id"].isin(menu_df["item_id"]).all()
+    assert shifts_df["courier_id"].isin(couriers["courier_id"]).all()
     assert reviews_df["order_id"].isin(orders_df["order_id"]).all()
-    assert reviews_df["user_id"].isin(users["user_id"]).all()
     assert orders_df["user_id"].isin(users["user_id"]).all()
     assert orders_df["restaurant_id"].isin(rests["restaurant_id"]).all()
     assert orders_df["courier_id"].isin(couriers["courier_id"]).all()
     assert orders_df["district_id"].isin(districts["district_id"]).all()
-    print("Целостность проверена: 0 ошибок!")
+    print("Целостность данных Яндекс Доставки: 0 ошибок!")
 
-    return districts, users, rests, menu_df, couriers, orders_df, order_items_df, reviews_df
+    return districts, users, rests, menu_df, couriers, orders_df, order_items_df, shifts_df, reviews_df
 
 def main():
     default_out = Path(__file__).resolve().parent.parent / "data" / "raw"
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--users", type=int, default=100000, help="число пользователей (100 000)")
-    ap.add_argument("--restaurants", type=int, default=250, help="число ресторанов (250)")
-    ap.add_argument("--couriers", type=int, default=800, help="число курьеров (800)")
-    ap.add_argument("--orders", type=int, default=1000000, help="число заказов (1 000 000)")
-    ap.add_argument("--start", default="2025-10-01", help="первый день заказов")
-    ap.add_argument("--end", default="2026-09-30", help="последний день заказов")
+    ap.add_argument("--users", type=int, default=100000, help="клиенты (100 000)")
+    ap.add_argument("--restaurants", type=int, default=250, help="рестораны (250)")
+    ap.add_argument("--couriers", type=int, default=800, help="курьеры (800)")
+    ap.add_argument("--orders", type=int, default=1000000, help="заказы (1 000 000)")
+    ap.add_argument("--start", default="2025-10-01")
+    ap.add_argument("--end", default="2026-09-30")
     ap.add_argument("--seed", type=int, default=42)
-    ap.add_argument("--out", default=str(default_out), help="папка сохранения CSV")
+    ap.add_argument("--out", default=str(default_out))
     a = ap.parse_args()
 
-    t_start = time.time()
-    districts, users, rests, menu, couriers, orders, items, reviews = generate_all(
+    t0 = time.time()
+    districts, users, rests, menu, couriers, orders, items, shifts, reviews = generate_yandex_dw(
         a.users, a.restaurants, a.couriers, a.orders, a.start, a.end, a.seed
     )
+
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
 
@@ -475,18 +549,23 @@ def main():
         ("dim_couriers", couriers),
         ("fact_orders", orders),
         ("fact_order_items", items),
+        ("fact_courier_shifts", shifts),
         ("fact_reviews", reviews),
     ]
 
-    print("\n--- Запись CSV файлов в data/raw/ ---")
+    print("\n--- Запись CSV файлов модели Яндекс Доставки ---")
     for name, df in tables:
         csv_file = out / f"{name}.csv"
         df.to_csv(csv_file, index=False)
-        print(f"  {name:18s} {len(df):>9,} строк -> {csv_file.name}")
+        print(f"  {name:20s} {len(df):>9,} строк -> {csv_file.name}")
 
-    total_facts = len(orders) + len(items) + len(reviews)
-    print(f"\nВСЕГО СТРОК ФАКТОВ В МОДЕЛИ: {total_facts:,} (заказы: {len(orders):,}, позиции блюд: {len(items):,}, отзывы: {len(reviews):,})")
-    print(f"Время выполнения генерации: {time.time() - t_start:.2f} сек.")
+    total_facts = len(orders) + len(items) + len(shifts) + len(reviews)
+    print(f"\nВСЕГО СТРОК ФАКТОВ В МОДЕЛИ: {total_facts:,}")
+    print(f"  - fact_orders:         {len(orders):,}")
+    print(f"  - fact_order_items:    {len(items):,}")
+    print(f"  - fact_courier_shifts: {len(shifts):,}")
+    print(f"  - fact_reviews:        {len(reviews):,}")
+    print(f"Время генерации: {time.time() - t0:.2f} сек.")
 
 if __name__ == "__main__":
     main()

@@ -15,9 +15,9 @@ con = duckdb.connect(str(DB_PATH), read_only=True)
 # 1. Отчёт З03
 z03_lines = [
     "=================================================================",
-    "ОТЧЁТ ПО З03: ПРОВЕРКИ ТАБЛИЦ В DUCKDB",
+    "ОТЧЁТ ПО З03: ПРОВЕРКИ ТАБЛИЦ В DUCKDB (ЯНДЕКС ДОСТАВКА)",
     "=================================================================\n",
-    "--- 1. Число строк во всех таблицах модели ---",
+    "--- 1. Число строк во всех 10 таблицах модели ---",
     con.sql("""
         SELECT 'dim_districts' AS table_name, 'Измерение' AS role, COUNT(*) AS rows FROM dim_districts
         UNION ALL SELECT 'dim_users', 'Измерение', COUNT(*) FROM dim_users
@@ -27,6 +27,7 @@ z03_lines = [
         UNION ALL SELECT 'dim_date', 'Измерение', COUNT(*) FROM dim_date
         UNION ALL SELECT 'fact_orders', 'ФАКТ (Заказы)', COUNT(*) FROM fact_orders
         UNION ALL SELECT 'fact_order_items', 'ФАКТ (Позиции чеков)', COUNT(*) FROM fact_order_items
+        UNION ALL SELECT 'fact_courier_shifts', 'ФАКТ (Смены курьеров)', COUNT(*) FROM fact_courier_shifts
         UNION ALL SELECT 'fact_reviews', 'ФАКТ (Отзывы)', COUNT(*) FROM fact_reviews
     """).df().to_string(index=False),
     "\n--- 2. Проверка целостности внешних ключей (Broken Links / Orphans = 0) ---",
@@ -42,13 +43,15 @@ z03_lines = [
         LEFT JOIN dim_couriers c ON f.courier_id = c.courier_id
         LEFT JOIN dim_districts d ON f.district_id = d.district_id
     """).df().to_string(index=False),
-    "\n--- 3. Главная мера (Net GMV) и валовой объём (Gross GMV) ---",
+    "\n--- 3. Главная мера (Net GMV) и финансовый сплит платформы ---",
     con.sql("""
         SELECT
             COUNT(*) AS total_orders,
             COUNT(*) FILTER (WHERE status IN ('Доставлен', 'Опоздание')) AS delivered_orders,
             SUM(total_amount) FILTER (WHERE status IN ('Доставлен', 'Опоздание')) AS net_gmv_byn,
-            SUM(total_amount) AS gross_gmv_byn
+            SUM(platform_commission) FILTER (WHERE status IN ('Доставлен', 'Опоздание')) AS yandex_commission_byn,
+            SUM(courier_payout) FILTER (WHERE status IN ('Доставлен', 'Опоздание')) AS courier_payout_byn,
+            ROUND(AVG(surge_multiplier), 2) AS avg_surge_multiplier
         FROM fact_orders
     """).df().to_string(index=False),
     "\nВывод: данные согласованы с сырьём, отсутствуют NULL и сироты, главная мера зафиксирована."

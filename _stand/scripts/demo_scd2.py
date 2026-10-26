@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Скрипт демонстрации З06: Slowly Changing Dimension Type 2 (SCD2).
-Показывает версионирование справочника курьеров (dim_couriers_scd2),
-смену транспорта, исторический джойн заказов и сравнение с SCD1.
+Показывает версионирование курьеров логистической сети Яндекс Про (dim_couriers_scd2).
 """
 from pathlib import Path
 import sys
@@ -21,7 +20,6 @@ def main():
     con = duckdb.connect(str(DB_PATH))
 
     sql_content = SQL_PATH.read_text(encoding="utf-8")
-    # Выполняем создание таблицы и подготовку сценария
     con.execute(sql_content)
 
     output_lines = []
@@ -31,13 +29,13 @@ def main():
         output_lines.append(msg)
 
     log_print("=================================================================")
-    log_print("ДЕМОНСТРАЦИЯ З06: ИСТОРИЯ СПРАВОЧНИКА (SCD2 ДЛЯ DIM_COURIERS)")
+    log_print("ДЕМОНСТРАЦИЯ З06: ИСТОРИЯ СПРАВОЧНИКА (SCD2 ДЛЯ ЯНДЕКС ПРО)")
     log_print("=================================================================")
 
-    log_print("\n--- 1. Все версии одной сущности (курьер ID 42 сменил транспорт дважды) ---")
+    log_print("\n--- 1. Все версии одной сущности (курьер ID 42 сменил транспорт и грейд дважды) ---")
     df_versions = con.sql("""
         SELECT 
-            courier_sk, courier_id, name, vehicle_type,
+            courier_sk, courier_id, name, vehicle_type, courier_tier,
             valid_from, valid_to, is_current
         FROM dim_couriers_scd2
         WHERE courier_id = 42
@@ -53,9 +51,12 @@ def main():
             scd.courier_id,
             scd.name AS courier_name,
             scd.vehicle_type AS historical_vehicle_type,
+            scd.courier_tier AS historical_tier,
             scd.valid_from,
             scd.valid_to,
-            o.delivery_time_minutes,
+            o.cooking_time_min,
+            o.transit_time_min,
+            o.delivery_time_min,
             o.status
         FROM fact_orders o
         JOIN dim_couriers_scd2 scd 
@@ -72,8 +73,10 @@ def main():
     df_agg = con.sql("""
         SELECT 
             scd.vehicle_type,
+            scd.courier_tier,
             COUNT(o.order_id) AS orders_count,
-            ROUND(AVG(o.delivery_time_minutes), 1) AS avg_delivery_minutes,
+            ROUND(AVG(o.transit_time_min), 1) AS avg_transit_minutes,
+            ROUND(AVG(o.delivery_time_min), 1) AS avg_total_delivery_minutes,
             COUNT(*) FILTER (WHERE o.status = 'Опоздание') AS late_orders_cnt,
             MIN(o.order_date) AS first_order_date,
             MAX(o.order_date) AS last_order_date
@@ -83,7 +86,7 @@ def main():
          AND o.order_date >= scd.valid_from
          AND (o.order_date < scd.valid_to OR scd.valid_to IS NULL)
         WHERE o.courier_id = 42 AND o.status IN ('Доставлен', 'Опоздание')
-        GROUP BY scd.vehicle_type
+        GROUP BY scd.vehicle_type, scd.courier_tier
         ORDER BY MIN(o.order_date);
     """).df()
     log_print(df_agg.to_string(index=False))

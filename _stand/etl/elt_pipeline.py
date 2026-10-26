@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""ELT-пайплайн аналитической витрины (Constellation Schema).
+"""ELT-пайплайн аналитической витрины «Яндекс Доставка» (Fact Constellation Schema).
 Выполняет:
   1. Чтение сырых CSV в staging-слой (DuckDB).
   2. Data Quality проверки (NULL, дубликаты зерна, диапазоны, битые ссылки FK).
@@ -55,6 +55,9 @@ def run_pipeline(con: duckdb.DuckDBPyConnection, run_number: int) -> dict:
         CREATE OR REPLACE TEMP TABLE stg_order_items AS
         SELECT * FROM read_csv_auto('{RAW_DIR.as_posix()}/fact_order_items.csv', header=True);
 
+        CREATE OR REPLACE TEMP TABLE stg_courier_shifts AS
+        SELECT * FROM read_csv_auto('{RAW_DIR.as_posix()}/fact_courier_shifts.csv', header=True);
+
         CREATE OR REPLACE TEMP TABLE stg_reviews AS
         SELECT * FROM read_csv_auto('{RAW_DIR.as_posix()}/fact_reviews.csv', header=True);
     """)
@@ -69,6 +72,7 @@ def run_pipeline(con: duckdb.DuckDBPyConnection, run_number: int) -> dict:
         SELECT
             (SELECT COUNT(*) FROM stg_orders WHERE order_id IS NULL OR user_id IS NULL OR restaurant_id IS NULL OR courier_id IS NULL OR district_id IS NULL) +
             (SELECT COUNT(*) FROM stg_order_items WHERE order_item_id IS NULL OR order_id IS NULL OR item_id IS NULL) +
+            (SELECT COUNT(*) FROM stg_courier_shifts WHERE shift_id IS NULL OR courier_id IS NULL) +
             (SELECT COUNT(*) FROM stg_reviews WHERE review_id IS NULL OR order_id IS NULL OR user_id IS NULL) AS total_nulls
     """).fetchone()[0]
     res1 = f"  [{'OK' if nulls == 0 else 'FAIL'}] Пустые ключи (NULL в обязательных полях): {nulls} ошибок"
@@ -79,8 +83,9 @@ def run_pipeline(con: duckdb.DuckDBPyConnection, run_number: int) -> dict:
     # Проверка 2: Аномальные диапазоны
     ranges = con.sql("""
         SELECT
-            (SELECT COUNT(*) FROM stg_orders WHERE total_amount <= 0 OR delivery_fee < 0 OR status NOT IN ('Доставлен', 'Опоздание', 'Отменен')) +
+            (SELECT COUNT(*) FROM stg_orders WHERE total_amount <= 0 OR delivery_fee < 0 OR surge_multiplier < 1.0 OR status NOT IN ('Доставлен', 'Опоздание', 'Отменен')) +
             (SELECT COUNT(*) FROM stg_order_items WHERE quantity <= 0 OR unit_price <= 0 OR subtotal_amount <= 0) +
+            (SELECT COUNT(*) FROM stg_courier_shifts WHERE hours_online <= 0 OR total_payout < 0) +
             (SELECT COUNT(*) FROM stg_reviews WHERE food_rating NOT BETWEEN 1 AND 5 OR delivery_rating NOT BETWEEN 1 AND 5) AS bad_ranges
     """).fetchone()[0]
     res2 = f"  [{'OK' if ranges == 0 else 'FAIL'}] Некорректные диапазоны (суммы <= 0, рейтинги вне 1..5): {ranges} ошибок"
@@ -93,6 +98,7 @@ def run_pipeline(con: duckdb.DuckDBPyConnection, run_number: int) -> dict:
         SELECT
             (SELECT COUNT(*) - COUNT(DISTINCT order_id) FROM stg_orders) +
             (SELECT COUNT(*) - COUNT(DISTINCT order_item_id) FROM stg_order_items) +
+            (SELECT COUNT(*) - COUNT(DISTINCT shift_id) FROM stg_courier_shifts) +
             (SELECT COUNT(*) - COUNT(DISTINCT review_id) FROM stg_reviews) AS total_duplicates
     """).fetchone()[0]
     res3 = f"  [{'OK' if dups == 0 else 'FAIL'}] Дубликаты первичных ключей фактов: {dups} ошибок"
@@ -109,6 +115,7 @@ def run_pipeline(con: duckdb.DuckDBPyConnection, run_number: int) -> dict:
             (SELECT COUNT(*) FROM stg_orders o LEFT JOIN stg_districts d ON o.district_id = d.district_id WHERE d.district_id IS NULL) +
             (SELECT COUNT(*) FROM stg_order_items oi LEFT JOIN stg_orders o ON oi.order_id = o.order_id WHERE o.order_id IS NULL) +
             (SELECT COUNT(*) FROM stg_order_items oi LEFT JOIN stg_menu_items m ON oi.item_id = m.item_id WHERE m.item_id IS NULL) +
+            (SELECT COUNT(*) FROM stg_courier_shifts s LEFT JOIN stg_couriers c ON s.courier_id = c.courier_id WHERE c.courier_id IS NULL) +
             (SELECT COUNT(*) FROM stg_reviews rev LEFT JOIN stg_orders o ON rev.order_id = o.order_id WHERE o.order_id IS NULL) AS total_orphans
     """).fetchone()[0]
     res4 = f"  [{'OK' if orphans == 0 else 'FAIL'}] «Сироты» (Orphan keys во всех связях фактов и справочников): {orphans} ошибок"
@@ -124,16 +131,17 @@ def run_pipeline(con: duckdb.DuckDBPyConnection, run_number: int) -> dict:
     con.execute(DDL_PATH.read_text(encoding="utf-8"))
 
     con.execute("""
-        INSERT INTO dim_districts SELECT district_id, district_name, zone_type, CAST(delivery_multiplier AS DECIMAL(3, 2)) FROM stg_districts;
-        INSERT INTO dim_users SELECT user_id, name, phone, CAST(registration_date AS DATE), district_id FROM stg_users;
-        INSERT INTO dim_restaurants SELECT restaurant_id, name, cuisine, district_id, CAST(rating AS DECIMAL(3, 2)) FROM stg_restaurants;
+        INSERT INTO dim_districts SELECT district_id, district_name, zone_type, CAST(base_delivery_cost AS DECIMAL(6, 2)), CAST(avg_distance_km AS DECIMAL(4, 1)) FROM stg_districts;
+        INSERT INTO dim_users SELECT user_id, name, phone, CAST(registration_date AS DATE), district_id, has_plus_subscription FROM stg_users;
+        INSERT INTO dim_restaurants SELECT restaurant_id, name, cuisine, district_id, partnership_tier, CAST(rating AS DECIMAL(3, 2)) FROM stg_restaurants;
         INSERT INTO dim_menu_items SELECT item_id, restaurant_id, name, category, CAST(price AS DECIMAL(8, 2)), weight_grams, is_spicy, is_vegetarian FROM stg_menu_items;
-        INSERT INTO dim_couriers SELECT courier_id, name, phone, vehicle_type FROM stg_couriers;
+        INSERT INTO dim_couriers SELECT courier_id, name, phone, vehicle_type, courier_tier FROM stg_couriers;
         INSERT INTO dim_date SELECT d::DATE, EXTRACT(YEAR FROM d)::INTEGER, EXTRACT(MONTH FROM d)::INTEGER, EXTRACT(ISODOW FROM d)::INTEGER, EXTRACT(ISODOW FROM d) IN (5, 6, 7) FROM generate_series(DATE '2025-10-01', DATE '2026-10-01', INTERVAL 1 DAY) AS t(d);
 
-        INSERT INTO fact_orders SELECT order_id, user_id, restaurant_id, courier_id, district_id, CAST(order_date AS TIMESTAMP), CAST(delivery_fee AS DECIMAL(6, 2)), CAST(total_amount AS DECIMAL(10, 2)), TRY_CAST(delivery_time_minutes AS INTEGER), status FROM stg_orders;
-        INSERT INTO fact_order_items SELECT order_item_id, order_id, item_id, quantity, CAST(unit_price AS DECIMAL(8, 2)), CAST(item_discount AS DECIMAL(8, 2)), CAST(subtotal_amount AS DECIMAL(10, 2)) FROM stg_order_items;
-        INSERT INTO fact_reviews SELECT review_id, order_id, user_id, restaurant_id, courier_id, CAST(review_date AS TIMESTAMP), food_rating, delivery_rating, has_comment FROM stg_reviews;
+        INSERT INTO fact_orders SELECT order_id, user_id, restaurant_id, courier_id, district_id, CAST(order_date AS TIMESTAMP), tariff, weather, CAST(surge_multiplier AS DECIMAL(3, 2)), CAST(items_subtotal AS DECIMAL(10, 2)), CAST(delivery_fee AS DECIMAL(6, 2)), CAST(surge_fee AS DECIMAL(6, 2)), CAST(discount_amount AS DECIMAL(6, 2)), CAST(total_amount AS DECIMAL(10, 2)), CAST(platform_commission AS DECIMAL(10, 2)), CAST(courier_payout AS DECIMAL(8, 2)), CAST(tip_amount AS DECIMAL(6, 2)), cooking_time_min, transit_time_min, TRY_CAST(delivery_time_min AS INTEGER), status FROM stg_orders;
+        INSERT INTO fact_order_items SELECT order_item_id, order_id, item_id, quantity, CAST(unit_price AS DECIMAL(8, 2)), CAST(discount_amount AS DECIMAL(8, 2)), CAST(subtotal_amount AS DECIMAL(10, 2)) FROM stg_order_items;
+        INSERT INTO fact_courier_shifts SELECT shift_id, courier_id, CAST(shift_date AS DATE), CAST(hours_online AS DECIMAL(4, 2)), orders_completed, CAST(base_earnings AS DECIMAL(8, 2)), CAST(bonus_earnings AS DECIMAL(8, 2)), CAST(tips_total AS DECIMAL(6, 2)), CAST(total_payout AS DECIMAL(8, 2)) FROM stg_courier_shifts;
+        INSERT INTO fact_reviews SELECT review_id, order_id, user_id, restaurant_id, courier_id, CAST(review_date AS TIMESTAMP), food_rating, delivery_rating, complaint_tag, has_comment FROM stg_reviews;
     """)
 
     # 4. Контрольная сверка
@@ -142,15 +150,16 @@ def run_pipeline(con: duckdb.DuckDBPyConnection, run_number: int) -> dict:
         SELECT 
             (SELECT COUNT(*) FROM fact_orders) AS orders_cnt,
             (SELECT COUNT(*) FROM fact_order_items) AS items_cnt,
+            (SELECT COUNT(*) FROM fact_courier_shifts) AS shifts_cnt,
             (SELECT COUNT(*) FROM fact_reviews) AS reviews_cnt,
             COUNT(*) FILTER (WHERE status IN ('Доставлен', 'Опоздание')) AS delivered_orders,
             ROUND(SUM(total_amount) FILTER (WHERE status IN ('Доставлен', 'Опоздание')), 2) AS net_gmv,
-            ROUND(SUM(total_amount), 2) AS gross_gmv
+            ROUND(SUM(platform_commission) FILTER (WHERE status IN ('Доставлен', 'Опоздание')), 2) AS platform_take_rate
         FROM fact_orders
     """).fetchone()
 
-    stat_line = f"  Строк фактов: fact_orders={row_stats[0]:,} | fact_order_items={row_stats[1]:,} | fact_reviews={row_stats[2]:,}\n" \
-                f"  Главная метрика: delivered_orders={row_stats[3]:,} | Net GMV = {row_stats[4]} BYN | Gross GMV = {row_stats[5]} BYN"
+    stat_line = f"  Строк фактов: fact_orders={row_stats[0]:,} | fact_order_items={row_stats[1]:,} | fact_courier_shifts={row_stats[2]:,} | fact_reviews={row_stats[3]:,}\n" \
+                f"  Метрики: delivered_orders={row_stats[4]:,} | Net GMV = {row_stats[5]} BYN | Platform Commission = {row_stats[6]} BYN"
     print(step4)
     print(stat_line)
     logs.extend([step4, stat_line])
@@ -158,8 +167,9 @@ def run_pipeline(con: duckdb.DuckDBPyConnection, run_number: int) -> dict:
     return {
         "orders_cnt": row_stats[0],
         "items_cnt": row_stats[1],
-        "reviews_cnt": row_stats[2],
-        "net_gmv": float(row_stats[4]),
+        "shifts_cnt": row_stats[2],
+        "reviews_cnt": row_stats[3],
+        "net_gmv": float(row_stats[5]),
         "logs": "\n".join(logs)
     }
 
@@ -168,20 +178,17 @@ def main():
     con = duckdb.connect(str(DB_PATH))
     all_logs = []
 
-    # Запуск #1
     res1 = run_pipeline(con, 1)
     all_logs.append(res1["logs"])
 
-    # Запуск #2 (проверка идемпотентности)
     res2 = run_pipeline(con, 2)
     all_logs.append(res2["logs"])
 
-    # Сравнение
     cmp_header = "\n=================================================================\n" \
                  "СРАВНЕНИЕ ДВУХ ПРОГОНОВ ПОДРЯД (ИДЕМПОТЕНТНОСТЬ):\n" \
                  "================================================================="
-    cmp_line1 = f"Прогон #1 -> fact_orders: {res1['orders_cnt']} | fact_order_items: {res1['items_cnt']} | Net GMV: {res1['net_gmv']:.2f} BYN"
-    cmp_line2 = f"Прогон #2 -> fact_orders: {res2['orders_cnt']} | fact_order_items: {res2['items_cnt']} | Net GMV: {res2['net_gmv']:.2f} BYN"
+    cmp_line1 = f"Прогон #1 -> fact_orders: {res1['orders_cnt']} | items: {res1['items_cnt']} | Net GMV: {res1['net_gmv']:.2f} BYN"
+    cmp_line2 = f"Прогон #2 -> fact_orders: {res2['orders_cnt']} | items: {res2['items_cnt']} | Net GMV: {res2['net_gmv']:.2f} BYN"
     is_match = (res1["orders_cnt"] == res2["orders_cnt"]) and (res1["items_cnt"] == res2["items_cnt"]) and (res1["net_gmv"] == res2["net_gmv"])
     cmp_res = "ИТОГ: ПРОЙДЕНО УСПЕШНО (Данные и главная метрика идентичны, задвоения нет)." if is_match else "ИТОГ: ОШИБКА ИДЕМПОТЕНТНОСТИ!"
 
