@@ -1,0 +1,25 @@
+=================================================================
+ОТЧЁТ ПО З03: ПРОВЕРКИ ТАБЛИЦ В DUCKDB
+=================================================================
+
+--- 1. Число строк во всех таблицах модели ---
+      table_name                 role    rows
+   dim_districts            Измерение      12
+       dim_users            Измерение  100000
+ dim_restaurants            Измерение     250
+  dim_menu_items            Измерение    2500
+    dim_couriers            Измерение     800
+        dim_date            Измерение     366
+     fact_orders        ФАКТ (Заказы) 1000000
+fact_order_items ФАКТ (Позиции чеков) 2601720
+    fact_reviews        ФАКТ (Отзывы)  585149
+
+--- 2. Проверка целостности внешних ключей (Broken Links / Orphans = 0) ---
+ missing_users  missing_restaurants  missing_couriers  missing_districts
+             0                    0                 0                  0
+
+--- 3. Главная мера (Net GMV) и валовой объём (Gross GMV) ---
+ total_orders  delivered_orders  net_gmv_byn  gross_gmv_byn
+      1000000            899763  54595838.25    60648870.64
+
+Вывод: данные согласованы с сырьём, отсутствуют NULL и сироты, главная мера зафиксирована.

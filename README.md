@@ -8,15 +8,16 @@
 
 ---
 
-## Навигация по заданиям
+## Навигация по выполненным лабораторным работам
 
 - **[З01. Стенд и сырьё](_stand/README.md):** Развёртывание окружения Docker (ClickHouse, Metabase), структура каталогов, генерация сырых CSV-данных.
 - **[З02. Паспорт модели (Constellation Schema)](_stand/passport.md):**
   - Паспорт витрины: зерно фактов (`fact_orders`, `fact_order_items`, `fact_reviews`), схема, меры и главная метрика.
   - Договор об ограничениях: [cut.md](_stand/cut.md).
-- **[З03. Витрина DuckDB](_stand/README.md#2-з03-сборка-витрины-duckdb):** DDL-схема 8 таблиц (`sql/ddl_duckdb.sql`) и скрипт сборки/проверки базы (`scripts/build_duckdb.py`).
-- **[З04. Аналитический SQL](_stand/README.md#3-з04-аналитический-sql):** Расчёт эталона главной метрики (`sql/canonical_metric.sql`) и 3 сложных аналитических запроса с оконными функциями (`sql/analytics.sql`, `scripts/run_analytics.py`).
-- **[З05. ELT-пайплайн и проверки качества](_stand/README.md#4-з05-автоматизированный-elt-пайплайн-и-проверки-качества):** Автоматизированная загрузка через staging-слой, data quality checks и проверка идемпотентности (`etl/elt_pipeline.py`).
+- **[З03. Витрина DuckDB](_stand/README.md#статус-выполнения-лабораторных-работ-з02--з06):** DDL-схема 8 таблиц (`sql/ddl_duckdb.sql`), скрипт сборки/проверки базы (`scripts/build_duckdb.py`), отчёт проверок (`reports/z03_checks.txt`).
+- **[З04. Аналитический SQL](_stand/README.md#статус-выполнения-лабораторных-работ-з02--з06):** Расчёт эталона главной метрики (`sql/canonical_metric.sql`), 3 аналитических запроса с окнами (`sql/analytics.sql`, `scripts/run_analytics.py`), отчёт (`reports/z04_analytics_output.txt`).
+- **[З05. ELT-пайплайн и проверки качества](_stand/README.md#статус-выполнения-лабораторных-работ-з02--з06):** Автоматизированная загрузка через staging-слой, 4 Data Quality проверки и тестирование идемпотентности (`etl/elt_pipeline.py`), лог (`etl/run_log.txt`).
+- **[З06. История справочника (SCD2)](_stand/scd2.md):** Версионирование транспорта курьеров (`sql/scd2_demo.sql`, `scripts/demo_scd2.py`), Point-in-Time джойн, отчёт (`reports/z06_scd2_output.txt`).
 
 ---
 
@@ -31,30 +32,27 @@
   - `dim_users` — Клиенты сервиса (100 000 записей).
   - `dim_restaurants` — Заведения и кухни (250 записей).
   - `dim_menu_items` — Каталог блюд с категориями и свойствами (2 500 позиций).
-  - `dim_couriers` — Курьеры и транспорт (800 записей, кандидат на SCD2).
+  - `dim_couriers` / `dim_couriers_scd2` — Курьеры и версионирование транспорта (SCD2).
   - `dim_date` — Календарное измерение (366 дней).
 - **Главная метрика (Net GMV):** Выручка по доставленным заказам = **`54 595 838.25 BYN`** (899 763 доставленных заказа).
 
 ---
 
-## Быстрый старт
+## Быстрый старт (Запуск всех лабораторных работ)
 
-### 1. Генерация данных (при необходимости изменения параметров)
 ```bash
-python _stand/scripts/generate_data.py --orders 1000000 --users 100000 --restaurants 250 --couriers 800
-```
+# Генерация сырых данных (при необходимости перегенерации)
+python _stand/scripts/generate_data.py --orders 1000000 --users 100000
 
-### 2. Сборка аналитической витрины DuckDB
-```bash
+# З03: Сборка витрины DuckDB
 python _stand/scripts/build_duckdb.py
-```
 
-### 3. Запуск аналитических запросов З04
-```bash
+# З04: Выполнение аналитического SQL
 python _stand/scripts/run_analytics.py
-```
 
-### 4. Запуск ELT-пайплайна с проверкой качества и идемпотентности З05
-```bash
+# З05: Запуск ELT-пайплайна с проверкой качества и идемпотентности
 python _stand/etl/elt_pipeline.py
+
+# З06: Демонстрация версионирования справочника курьеров (SCD2)
+python _stand/scripts/demo_scd2.py
 ```
