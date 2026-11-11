@@ -7,7 +7,7 @@
 
 ---
 
-## Статус выполнения лабораторных работ (З02 – З07)
+## Статус выполнения лабораторных работ (З02 – З08)
 
 | Задание | Тема | Реализованные файлы и артефакты | Статус |
 | :--- | :--- | :--- | :---: |
@@ -18,6 +18,7 @@
 | **З05** | Загрузка и проверки | Пайплайн [`etl/elt_pipeline.py`](etl/elt_pipeline.py), 4 проверки качества, лог 2 прогонов [`etl/run_log.txt`](etl/run_log.txt) | **Выполнено** |
 | **З06** | История справочника (SCD2) | Описание [`scd2.md`](scd2.md), DDL и демо [`sql/scd2_demo.sql`](sql/scd2_demo.sql), раннер [`scripts/demo_scd2.py`](scripts/demo_scd2.py), отчёт [`reports/z06_scd2_output.txt`](reports/z06_scd2_output.txt) | **Выполнено** |
 | **З07** | Данные в ClickHouse | DDL [`sql/ddl_clickhouse.sql`](sql/ddl_clickhouse.sql), обоснование [`notes/order_by_rationale.md`](notes/order_by_rationale.md), загрузчик/сверка [`scripts/load_clickhouse.py`](scripts/load_clickhouse.py), отчёт [`reports/z07_clickhouse_verification.txt`](reports/z07_clickhouse_verification.txt) | **Выполнено** |
+| **З08** | Запросы и ключи CH | SQL [`sql/canonical_metric_clickhouse.sql`](sql/canonical_metric_clickhouse.sql), [`sql/analytics_clickhouse.sql`](sql/analytics_clickhouse.sql), заметка [`notes/partitions_and_keys.md`](notes/partitions_and_keys.md), раннер [`scripts/run_analytics_ch.py`](scripts/run_analytics_ch.py), отчёт [`reports/z08_analytics_ch_output.txt`](reports/z08_analytics_ch_output.txt) | **Выполнено** |
 
 ---
 
@@ -69,5 +70,8 @@ python scripts/demo_scd2.py
 
 # 5. Загрузка в ClickHouse и сверка метрик с DuckDB (З07)
 python scripts/load_clickhouse.py
+
+# 6. Выполнение аналитических запросов в ClickHouse (З08)
+python scripts/run_analytics_ch.py
 ```
 Все отчёты сохраняются в папке `reports/` и `etl/run_log.txt`.
