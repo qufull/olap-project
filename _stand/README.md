@@ -7,7 +7,7 @@
 
 ---
 
-## Статус выполнения лабораторных работ (З02 – З06)
+## Статус выполнения лабораторных работ (З02 – З07)
 
 | Задание | Тема | Реализованные файлы и артефакты | Статус |
 | :--- | :--- | :--- | :---: |
@@ -17,6 +17,7 @@
 | **З04** | Аналитический SQL | Эталон [`sql/canonical_metric.sql`](sql/canonical_metric.sql), запросы [`sql/analytics.sql`](sql/analytics.sql), раннер [`scripts/run_analytics.py`](scripts/run_analytics.py), отчёт [`reports/z04_analytics_output.txt`](reports/z04_analytics_output.txt) | **Выполнено** |
 | **З05** | Загрузка и проверки | Пайплайн [`etl/elt_pipeline.py`](etl/elt_pipeline.py), 4 проверки качества, лог 2 прогонов [`etl/run_log.txt`](etl/run_log.txt) | **Выполнено** |
 | **З06** | История справочника (SCD2) | Описание [`scd2.md`](scd2.md), DDL и демо [`sql/scd2_demo.sql`](sql/scd2_demo.sql), раннер [`scripts/demo_scd2.py`](scripts/demo_scd2.py), отчёт [`reports/z06_scd2_output.txt`](reports/z06_scd2_output.txt) | **Выполнено** |
+| **З07** | Данные в ClickHouse | DDL [`sql/ddl_clickhouse.sql`](sql/ddl_clickhouse.sql), обоснование [`notes/order_by_rationale.md`](notes/order_by_rationale.md), загрузчик/сверка [`scripts/load_clickhouse.py`](scripts/load_clickhouse.py), отчёт [`reports/z07_clickhouse_verification.txt`](reports/z07_clickhouse_verification.txt) | **Выполнено** |
 
 ---
 
@@ -65,5 +66,8 @@ python etl/elt_pipeline.py
 
 # 4. Демонстрация версионирования SCD2 и Point-in-Time джойна (З06)
 python scripts/demo_scd2.py
+
+# 5. Загрузка в ClickHouse и сверка метрик с DuckDB (З07)
+python scripts/load_clickhouse.py
 ```
 Все отчёты сохраняются в папке `reports/` и `etl/run_log.txt`.
