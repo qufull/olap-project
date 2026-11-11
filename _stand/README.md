@@ -7,7 +7,7 @@
 
 ---
 
-## Статус выполнения лабораторных работ (З02 – З08)
+## Статус выполнения лабораторных работ (З02 – З11)
 
 | Задание | Тема | Реализованные файлы и артефакты | Статус |
 | :--- | :--- | :--- | :---: |
@@ -19,6 +19,9 @@
 | **З06** | История справочника (SCD2) | Описание [`scd2.md`](scd2.md), DDL и демо [`sql/scd2_demo.sql`](sql/scd2_demo.sql), раннер [`scripts/demo_scd2.py`](scripts/demo_scd2.py), отчёт [`reports/z06_scd2_output.txt`](reports/z06_scd2_output.txt) | **Выполнено** |
 | **З07** | Данные в ClickHouse | DDL [`sql/ddl_clickhouse.sql`](sql/ddl_clickhouse.sql), обоснование [`notes/order_by_rationale.md`](notes/order_by_rationale.md), загрузчик/сверка [`scripts/load_clickhouse.py`](scripts/load_clickhouse.py), отчёт [`reports/z07_clickhouse_verification.txt`](reports/z07_clickhouse_verification.txt) | **Выполнено** |
 | **З08** | Запросы и ключи CH | SQL [`sql/canonical_metric_clickhouse.sql`](sql/canonical_metric_clickhouse.sql), [`sql/analytics_clickhouse.sql`](sql/analytics_clickhouse.sql), заметка [`notes/partitions_and_keys.md`](notes/partitions_and_keys.md), раннер [`scripts/run_analytics_ch.py`](scripts/run_analytics_ch.py), отчёт [`reports/z08_analytics_ch_output.txt`](reports/z08_analytics_ch_output.txt) | **Выполнено** |
+| **З09** | Сводная таблица (MV) | DDL [`sql/ddl_summary_mv.sql`](sql/ddl_summary_mv.sql), заметка [`notes/z09.md`](notes/z09.md), сборщик [`scripts/build_summary_mv.py`](scripts/build_summary_mv.py), отчёт [`reports/z09_summary_verification.txt`](reports/z09_summary_verification.txt) | **Выполнено** |
+| **З10** | Дашборд Metabase | Спецификация [`dashboards/dashboard_spec.md`](dashboards/dashboard_spec.md), SQL виджетов [`dashboards/*.sql`](dashboards/), 2 глобальных фильтра | **Выполнено** |
+| **З11** | SQL и карточка — одно число | Протокол сверки [`notes/z11_protocol.md`](notes/z11_protocol.md), скрипт проверки [`scripts/verify_z11_reconciliation.py`](scripts/verify_z11_reconciliation.py), отчёт [`reports/z11_metric_reconciliation.txt`](reports/z11_metric_reconciliation.txt) | **Выполнено** |
 
 ---
 
@@ -73,5 +76,11 @@ python scripts/load_clickhouse.py
 
 # 6. Выполнение аналитических запросов в ClickHouse (З08)
 python scripts/run_analytics_ch.py
+
+# 7. Сборка сводной таблицы под график и сверка с детальной (З09)
+python scripts/build_summary_mv.py
+
+# 8. Сверка эталона SQL с карточкой дашборда Metabase (З11)
+python scripts/verify_z11_reconciliation.py
 ```
 Все отчёты сохраняются в папке `reports/` и `etl/run_log.txt`.
