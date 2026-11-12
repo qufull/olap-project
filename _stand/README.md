@@ -22,6 +22,7 @@
 | **З09** | Сводная таблица (MV) | DDL [`sql/ddl_summary_mv.sql`](sql/ddl_summary_mv.sql), заметка [`notes/z09.md`](notes/z09.md), сборщик [`scripts/build_summary_mv.py`](scripts/build_summary_mv.py), отчёт [`reports/z09_summary_verification.txt`](reports/z09_summary_verification.txt) | **Выполнено** |
 | **З10** | Дашборд Metabase | Спецификация [`dashboards/dashboard_spec.md`](dashboards/dashboard_spec.md), SQL виджетов [`dashboards/*.sql`](dashboards/), 2 глобальных фильтра | **Выполнено** |
 | **З11** | SQL и карточка — одно число | Протокол сверки [`notes/z11_protocol.md`](notes/z11_protocol.md), скрипт проверки [`scripts/verify_z11_reconciliation.py`](scripts/verify_z11_reconciliation.py), отчёт [`reports/z11_metric_reconciliation.txt`](reports/z11_metric_reconciliation.txt) | **Выполнено** |
+| **З12** | Сборка к сдаче | Чеклист зачёта [`reports/checklist_defense.md`](reports/checklist_defense.md), мастер-скрипт [`scripts/run_all.py`](scripts/run_all.py), устный путь данных | **Выполнено** |
 
 ---
 
@@ -54,33 +55,37 @@
 
 ---
 
-## Как запустить все проверки проекта
+## Быстрый запуск стенда за 5 шагов
 
-Из папки `_stand`:
+1. **Запуск Docker-контейнеров:**
+   ```bash
+   docker compose up -d
+   ```
+   *(Поднимает ClickHouse на `:8123` и Metabase на `:3000`)*.
 
-```bash
-# 1. Сборка витрины DuckDB (З03)
-python scripts/build_duckdb.py
+2. **Сквозной прогон всех этапов (З01 — З11) одной командой:**
+   ```bash
+   python scripts/run_all.py
+   ```
+   *(Генерация данных, сборка DuckDB, ELT с 4 Data Quality проверками, SCD2, перенос в ClickHouse, построение сводки З09 и финальная сверка З11)*.
 
-# 2. Выполнение аналитических запросов с оконными функциями (З04)
-python scripts/run_analytics.py
+3. **Эталонный SQL главной метрики:**
+   * Файлы: [`sql/canonical_metric.sql`](sql/canonical_metric.sql) (DuckDB) и [`sql/canonical_metric_clickhouse.sql`](sql/canonical_metric_clickhouse.sql) (ClickHouse).
+   * Значение Net GMV: **`27 399 331.21 BYN`** (539 801 заказ).
 
-# 3. Запуск ELT-пайплайна с проверками качества и доказательством идемпотентности (З05)
-python etl/elt_pipeline.py
+4. **Дашборд Metabase:**
+   * URL: **`http://localhost:3000`** (база `yandex_dw` в ClickHouse).
+   * Спецификация и запросы всех виджетов: [`dashboards/dashboard_spec.md`](dashboards/dashboard_spec.md).
 
-# 4. Демонстрация версионирования SCD2 и Point-in-Time джойна (З06)
-python scripts/demo_scd2.py
+5. **Куда смотреть при ошибках:**
+   * Чеклист готовности: [`reports/checklist_defense.md`](reports/checklist_defense.md).
+   * Протоколы проверок и сверок: папка [`reports/`](reports/) и лог [`etl/run_log.txt`](etl/run_log.txt).
 
-# 5. Загрузка в ClickHouse и сверка метрик с DuckDB (З07)
-python scripts/load_clickhouse.py
+---
 
-# 6. Выполнение аналитических запросов в ClickHouse (З08)
-python scripts/run_analytics_ch.py
+## Устный рассказ: Путь данных от сырья до карточки (1–2 минуты)
 
-# 7. Сборка сводной таблицы под график и сверка с детальной (З09)
-python scripts/build_summary_mv.py
-
-# 8. Сверка эталона SQL с карточкой дашборда Metabase (З11)
-python scripts/verify_z11_reconciliation.py
-```
-Все отчёты сохраняются в папке `reports/` и `etl/run_log.txt`.
+> «**Путь данных выстроен следующим образом:**  
+> Исходные CSV-файлы (`data/raw/`) $\to$ ELT-скрипт с 4 шлюзами качества (NOT NULL, диапазоны, уникальность PK, отсутствие orphans) $\to$ витрина созвездия фактов в ClickHouse на движке `MergeTree` с помесячным партиционированием и физическим порядком сортировки `(status, order_date, district_id)`, который собирает отмены в конец куска и дает максимальное сжатие $\to$ эталонный SQL канонической метрики Net GMV $\to$ карточка и графики на дашборде Metabase с теми же фильтрами.  
+> **Одна строка факта (`fact_orders`)** = один оформленный заказ клиента.  
+> **Главная мера** = валовой оборот доставленных заказов (Net GMV) = 27 399 331.21 BYN (расхождение с карточкой дашборда ровно 0.00 BYN благодаря `DECIMAL`)».
